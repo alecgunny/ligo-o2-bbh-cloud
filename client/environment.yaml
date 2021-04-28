@@ -1,0 +1,14 @@
+name: o2
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - attrs
+  - google-cloud-storage
+  - gwpy
+  - numpy
+  - python-nds2-client
+  - python-ldas-tools-framecpp
+  - requests
+  - pip:
+      - git+https://github.com/alecgunny/stillwater.git@multistream

@@ -129,7 +129,7 @@ class ClientVMManager:
         )
         self.instances.insert(idx, instance)
 
-    def create_instances(self, N, vcpus):
+    def create_instances(self, \N, vcpus):
         for _ in range(N):
             self.create_instance(vcpus)
 
