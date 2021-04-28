@@ -10,3 +10,5 @@ bash miniconda.sh -b -p /conda
 git clone https://github.com/alecgunny/ligo-o2-bbh-cloud.git
 cd ligo-o2-bbh-cloud/client
 /conda/bin/conda env create -f environment.yaml
+
+/conda/bin/conda init bash
