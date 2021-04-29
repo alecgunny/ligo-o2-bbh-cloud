@@ -117,9 +117,9 @@ def read_frames(
     # bound operation so this shouldn't slow things
     # down (I think...)
     blobs = bucket.list_blobs(prefix=prefix)
-    loader_q = queue.Queue()
-    loader_event = threading.Event()
-    loader = threading.Thread(
+    loader_q = mp.Queue()
+    loader_event = mp.Event()
+    loader = mp.Process(
         target=_download_and_write_frames, args=(loader_q, blobs, loader_event)
     )
     loader.start()
@@ -128,7 +128,6 @@ def read_frames(
     try:
         while True:
             timestamp = _eager_get(loader_q, loader)
-            print(timestamp)
 
             fname = str(timestamp) + ".gwf"
             start = timestamp + 0
@@ -161,6 +160,12 @@ def read_frames(
     finally:
         loader_event.set()
         loader.join(10)
+        try:
+            loader.close()
+        except ValueError:
+            loader.terminate()
+            time.sleep(0.1)
+            loader.close()
 
 
 @attr.s(auto_attribs=True)
@@ -204,7 +209,10 @@ class GCPFrameDataGenerator:
             (self._idx + 1) * self._step > self._frame.shape[1]
         ):
             frame = _eager_get(self._q, self._frame_reader)
-            if self._idx * self._step < self._frame.shape[1]:
+            if (
+                self._frame is not None and
+                self._idx * self._step < self._frame.shape[1]
+            ):
                 leftover = self._frame[:, self._idx * self._step:]
                 frame = np.concatenate([leftover, frame], axis=1)
 
@@ -217,8 +225,9 @@ class GCPFrameDataGenerator:
                 (1. / self.generation_rate - 2e-4)
             ):
                 time.sleep(1e-6)
+            self._last_time = time.time()
 
-        x = self._frame[self._idx * self._step: (self._idx + 1) * self._step]
+        x = self._frame[:, self._idx * self._step: (self._idx + 1) * self._step]
         package = Package(x=x, t0=time.time())
         self._last_time = package.t0
         return package
@@ -255,7 +264,7 @@ if __name__ == "__main__":
         H1:DCS-CALIB_SRC_Q_INVERSE_C02
         H1:DCS-CALIB_SRC_Q_INVERSE_NOGATE_C02
     """.split("\n")
-    channels = [i.strip() for i in channels if i]
+    channels = [i.strip() for i in channels if i.strip()]
 
     dg = GCPFrameDataGenerator(
         bucket_name="ligo-o2",
@@ -263,8 +272,8 @@ if __name__ == "__main__":
         channels=channels,
         kernel_stride=0.1,
         generation_rate=1000,
-        segment_length=16,
-        prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854/H-H1_HOFT_C02-118540"
+        segment_length=1024,
+        prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854/H-H1_HOFT_C02-"
     )
 
     start_time = time.time()
@@ -276,10 +285,7 @@ if __name__ == "__main__":
             n += 1
 
             throughput = n / (time.time() - start_time)
-            msg = f"Output rate: {throughput:0.1f}"
+            msg = f"Processed {n} with rate: {throughput:0.1f}"
             print(msg, end="\r", flush=True)
-
-            if n == 10000:
-                break
     finally:
         dg.stop()
