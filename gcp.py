@@ -3,12 +3,11 @@ import yaml
 import time
 import typing
 from contextlib import contextmanager
-from functools import lru_cache
 
 import attr
 import paramiko
 from requests import HTTPError
-from scp import SCPClient, SCPException
+from scp import SCPClient
 
 from google.auth.transport.requests import Request as AuthRequest
 from google.cloud import compute_v1 as compute
@@ -129,7 +128,7 @@ class ClientVMManager:
         )
         self.instances.insert(idx, instance)
 
-    def create_instances(self, \N, vcpus):
+    def create_instances(self, N, vcpus):
         for _ in range(N):
             self.create_instance(vcpus)
 

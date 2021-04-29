@@ -9,8 +9,11 @@ dependencies:
   - numpy
   - python-nds2-client
   - python-ldas-tools-framecpp
+  - pyyaml
   - requests
   - tblib
   - pip
   - pip:
       - git+https://github.com/alecgunny/stillwater.git@multistream
+      - --extra-index-url "https://pypi.ngc.nvidia.com"
+      - tritonclient[all]
