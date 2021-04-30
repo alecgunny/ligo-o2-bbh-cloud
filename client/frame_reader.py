@@ -1,7 +1,6 @@
 import multiprocessing as mp
 import os
 import queue
-import threading
 import time
 import typing
 import yaml
@@ -97,7 +96,7 @@ def read_frames(
     bucket_name,
     sample_rate,
     channels,
-    segment_length,
+    chunk_size,
     prefix=None
 ):
     client = storage.Client()
@@ -133,7 +132,7 @@ def read_frames(
             start = timestamp + 0
             while start < timestamp + 4096:
                 end = min(
-                    start + segment_length,
+                    start + chunk_size,
                     timestamp + 4096
                 )
                 timeseries = TimeSeriesDict.read(
@@ -174,7 +173,7 @@ class GCPFrameDataGenerator:
     sample_rate: float
     channels: typing.List[str]
     kernel_stride: float
-    segment_length: float
+    chunk_size: float
     generation_rate: typing.Optional[float] = None
     prefix: typing.Optional[str] = None
 
@@ -195,7 +194,7 @@ class GCPFrameDataGenerator:
                 self.bucket_name,
                 self.sample_rate,
                 self.channels,
-                self.segment_length,
+                self.chunk_size,
                 self.prefix
             )
         )
@@ -227,7 +226,10 @@ class GCPFrameDataGenerator:
                 time.sleep(1e-6)
             self._last_time = time.time()
 
-        x = self._frame[:, self._idx * self._step: (self._idx + 1) * self._step]
+        x = self._frame[
+            :,
+            self._idx * self._step: (self._idx + 1) * self._step
+        ]
         package = Package(x=x, t0=time.time())
         self._last_time = package.t0
         return package
@@ -272,7 +274,7 @@ if __name__ == "__main__":
         channels=channels,
         kernel_stride=0.1,
         generation_rate=1000,
-        segment_length=1024,
+        chunk_size=1024,
         prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854/H-H1_HOFT_C02-"
     )
 
