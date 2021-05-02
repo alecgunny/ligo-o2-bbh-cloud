@@ -138,11 +138,7 @@ def read_frames(
             fname = str(timestamp) + ".gwf"
             start = timestamp + 0
             while start < timestamp + 4096:
-                end = min(
-                    start + chunk_size,
-                    timestamp + 4096
-                )
-
+                end = min(start + chunk_size, timestamp + 4096)
                 timeseries = TimeSeriesDict.read(
                     fname,
                     channels=list(set(channels)),
@@ -150,6 +146,7 @@ def read_frames(
                     start=start,
                     end=end
                 )
+
                 timeseries.resample(sample_rate)
                 frame = np.stack(
                     [timeseries[channel].value for channel in channels]
