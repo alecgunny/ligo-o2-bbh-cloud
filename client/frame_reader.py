@@ -56,12 +56,22 @@ def _eager_get(q, p):
     return item
 
 
-class _RaisedFromParent(Exception):
+def _eager_put(q, x, event):
     """
-    Dummmy exception for breaking out of outer while loop
-    below when in the while loop checking for q fullness
+    quick wrapper to avoid waiting on
+    q.put if the q is full in case we
+    raise an exception from the parent
+    process. Won't work if you're worried
+    about race conditions but we're not
     """
-    pass
+    while True:
+        try:
+            q.put_nowait(x)
+            return True
+        except queue.Full:
+            if event.is_set():
+                return False
+    return True
 
 
 @_catch_wrap_and_put
@@ -111,12 +121,9 @@ def read_frames(
             + content["error"]["message"]
         )
 
-    # thread the download so that we can iterate
-    # through it in parallel. This is a super IO
-    # bound operation so this shouldn't slow things
-    # down (I think...)
+    # run the download/write in a separate process
     blobs = bucket.list_blobs(prefix=prefix)
-    loader_q = mp.Queue()
+    loader_q = mp.Queue(maxsize=2)
     loader_event = mp.Event()
     loader = mp.Process(
         target=_download_and_write_frames, args=(loader_q, blobs, loader_event)
@@ -135,9 +142,10 @@ def read_frames(
                     start + chunk_size,
                     timestamp + 4096
                 )
+
                 timeseries = TimeSeriesDict.read(
                     fname,
-                    channels=channels,
+                    channels=list(set(channels)),
                     format="gwf",
                     start=start,
                     end=end
@@ -147,13 +155,8 @@ def read_frames(
                     [timeseries[channel].value for channel in channels]
                 )
 
-                try:
-                    while q.full():
-                        if stop_event.is_set():
-                            raise _RaisedFromParent
-                except _RaisedFromParent:
+                if not _eager_put(q, frame, stop_event):
                     break
-                q.put(frame)
                 start += 4096
             os.remove(fname)
     finally:
@@ -176,6 +179,7 @@ class GCPFrameDataGenerator:
     chunk_size: float
     generation_rate: typing.Optional[float] = None
     prefix: typing.Optional[str] = None
+    name: typing.Optional[str] = None
 
     def __attrs_post_init__(self):
         self._last_time = time.time()
@@ -203,21 +207,26 @@ class GCPFrameDataGenerator:
 
     def __next__(self):
         self._idx += 1
-        if (
-            self._frame is None or
-            (self._idx + 1) * self._step > self._frame.shape[1]
-        ):
+        start = self._idx * self._step
+        stop = (self._idx + 1) * self._step
+
+        # if we're about to exhaust the current
+        # frame, try to get another from the queue
+        if self._frame is None or stop > self._frame.shape[1]:
             frame = _eager_get(self._q, self._frame_reader)
-            if (
-                self._frame is not None and
-                self._idx * self._step < self._frame.shape[1]
-            ):
-                leftover = self._frame[:, self._idx * self._step:]
+
+            # check if we have any data left from the old frame
+            # and if so tack it to the start of the new frame
+            if self._frame is not None and stop < self._frame.shape[1]:
+                leftover = self._frame[:, start:]
                 frame = np.concatenate([leftover, frame], axis=1)
 
-            self._frame = frame
-            self._idx = 0
+            # reset the frame and index and update
+            # the start and stop to match
+            self._frame, self._idx = frame, 0
+            start, stop = 0, self._step
 
+        # pause a beat if we have a throttle
         if self.generation_rate is not None:
             while (
                 (time.time() - self._last_time) < 
@@ -226,11 +235,11 @@ class GCPFrameDataGenerator:
                 time.sleep(1e-6)
             self._last_time = time.time()
 
-        x = self._frame[
-            :,
-            self._idx * self._step: (self._idx + 1) * self._step
-        ]
+        # create a package from the
+        # current slice of the frame
+        x = self._frame[:, start:stop]
         package = Package(x=x, t0=time.time())
+
         self._last_time = package.t0
         return package
 
@@ -244,50 +253,26 @@ class GCPFrameDataGenerator:
                 self._frame_reader.terminate()
 
 
-if __name__ == "__main__":
-    channels = """
-        H1:DCS-CALIB_STATE_VECTOR_C02
-        H1:ODC-MASTER_CHANNEL_OUT_DQ
-        H1:DCS-CALIB_STRAIN_C02
-        H1:DCS-CALIB_KAPPA_TST_REAL_C02
-        H1:DCS-CALIB_KAPPA_TST_IMAGINARY_C02
-        H1:DCS-CALIB_KAPPA_TST_REAL_NOGATE_C02
-        H1:DCS-CALIB_KAPPA_TST_IMAGINARY_NOGATE_C02
-        H1:DCS-CALIB_KAPPA_PU_REAL_C02
-        H1:DCS-CALIB_KAPPA_PU_IMAGINARY_C02
-        H1:DCS-CALIB_KAPPA_PU_REAL_NOGATE_C02
-        H1:DCS-CALIB_KAPPA_PU_IMAGINARY_NOGATE_C02
-        H1:DCS-CALIB_KAPPA_C_C02
-        H1:DCS-CALIB_KAPPA_C_NOGATE_C02
-        H1:DCS-CALIB_F_CC_C02
-        H1:DCS-CALIB_F_CC_NOGATE_C02
-        H1:DCS-CALIB_F_S_C02
-        H1:DCS-CALIB_F_S_NOGATE_C02
-        H1:DCS-CALIB_SRC_Q_INVERSE_C02
-        H1:DCS-CALIB_SRC_Q_INVERSE_NOGATE_C02
-    """.split("\n")
-    channels = [i.strip() for i in channels if i.strip()]
+@attr.s(auto_attribs=True)
+class DualDetectorDataGenerator:
+    hanford: GCPFrameDataGenerator
+    livingston: GCPFrameDataGenerator
+    name: str
 
-    dg = GCPFrameDataGenerator(
-        bucket_name="ligo-o2",
-        sample_rate=4000,
-        channels=channels,
-        kernel_stride=0.1,
-        generation_rate=1000,
-        chunk_size=1024,
-        prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854/H-H1_HOFT_C02-"
-    )
+    def __iter__(self):
+        return self
 
-    start_time = time.time()
-    try:
-        dg = iter(dg)
-        n = 0
-        while True:
-            x = next(dg)
-            n += 1
+    def __next__(self):
+        packages = {}
+        strains, t0 = [], 0
+        for detector in [self.hanford, self.livingston]:
+            package = next(detector)
+            strains.append(package.x[0])
+            t0 += package.t0
 
-            throughput = n / (time.time() - start_time)
-            msg = f"Processed {n} with rate: {throughput:0.1f}"
-            print(msg, end="\r", flush=True)
-    finally:
-        dg.stop()
+            package.x = package.x[1:]
+            packages[detector.name] = package
+
+        strain = np.stack(strains)
+        packages[self.name] = Package(x=strain, t0=t0 / 2)
+        return packages

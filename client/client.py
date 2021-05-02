@@ -1,17 +1,13 @@
 import argparse
 import inspect
-import logging
+import re
 import time
 import typing
 
 import numpy as np
-from stillwater import (
-    ExceptionWrapper,
-    MultiSourceGenerator,
-    ThreadedMultiStreamInferenceClient
-)
+from stillwater import ExceptionWrapper, ThreadedMultiStreamInferenceClient
 
-from frame_reader import GCPFrameDataGenerator
+from frame_reader import GCPFrameDataGenerator, DualDetectorDataGenerator
 from channels import channels
 
 
@@ -35,18 +31,30 @@ def main(
         name="client"
     )
 
-    sources = []
+    sources = {}
     for state_name, shape in client.states.items():
-        sources.append(GCPFrameDataGenerator(
-            bucket_name,
-            sample_rate,
-            channels[state_name],
-            kernel_stride,
-            chunk_size,
-            generation_rate,
-            prefix
-        ))
-    source = MultiSourceGenerator(sources)
+        try:
+            name = re.search("(?<=deepclean_)[hl]", state_name).group(0)
+            if name == "h":
+                name = "hanford"
+            else:
+                name = "livingston"
+        except AttributeError:
+            # not for deepclean, so this is what we'll name
+            # the dualdetector generator for the strain channel
+            sources["name"] = state_name
+
+        sources[name] = GCPFrameDataGenerator(
+            bucket_name=bucket_name,
+            sample_rate=sample_rate,
+            channels=channels[name],
+            kernel_stride=kernel_stride,
+            chunk_size=chunk_size,
+            generation_rate=generation_rate,
+            prefix=prefix,
+            name=state_name
+        )
+    source = DualDetectorDataGenerator(**sources)
     pipe = client.add_data_source(
         source, str(sequence_id), sequence_id
     )
@@ -59,14 +67,12 @@ def main(
             if not pipe.poll():
                 continue
             package = pipe.recv()
-            if isinstance(package, ExceptionWrapper):
-                package.reraise()
+            try:
+                if isinstance(package, ExceptionWrapper):
+                    package.reraise()
+            except StopIteration:
+                break
             outputs.append(package.x)
-    except StopIteration:
-        logging.info("Completed!")
-        pass
-    except Exception:
-        logging.error("Encountered error")
     finally:
         client.stop()
 
@@ -78,6 +84,7 @@ def main(
             client.terminate()
             time.sleep(0.1)
             client.close()
+
         outputs = np.array(outputs)
         np.save("outputs.npy", outputs)
 

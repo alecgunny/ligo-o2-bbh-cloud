@@ -1,0 +1,29 @@
+dummy_channels = """
+    H1:DCS-CALIB_STATE_VECTOR_C02
+    H1:ODC-MASTER_CHANNEL_OUT_DQ
+    H1:DCS-CALIB_STRAIN_C02
+    H1:DCS-CALIB_KAPPA_TST_REAL_C02
+    H1:DCS-CALIB_KAPPA_TST_IMAGINARY_C02
+    H1:DCS-CALIB_KAPPA_TST_REAL_NOGATE_C02
+    H1:DCS-CALIB_KAPPA_TST_IMAGINARY_NOGATE_C02
+    H1:DCS-CALIB_KAPPA_PU_REAL_C02
+    H1:DCS-CALIB_KAPPA_PU_IMAGINARY_C02
+    H1:DCS-CALIB_KAPPA_PU_REAL_NOGATE_C02
+    H1:DCS-CALIB_KAPPA_PU_IMAGINARY_NOGATE_C02
+    H1:DCS-CALIB_KAPPA_C_C02
+    H1:DCS-CALIB_KAPPA_C_NOGATE_C02
+    H1:DCS-CALIB_F_CC_C02
+    H1:DCS-CALIB_F_CC_NOGATE_C02
+    H1:DCS-CALIB_F_S_C02
+    H1:DCS-CALIB_F_S_NOGATE_C02
+    H1:DCS-CALIB_SRC_Q_INVERSE_C02
+    H1:DCS-CALIB_SRC_Q_INVERSE_NOGATE_C02
+""".split("\n")
+dummy_channels = [i.strip() for i in dummy_channels if i.strip()]
+
+NUM_WITNESSES = 21
+while len(dummy_channels) < NUM_WITNESSES + 1:
+    dummy_channels += dummy_channels
+dummy_channels = dummy_channels[:NUM_WITNESSES + 1]
+
+channels = {"hanford": dummy_channels, "livingston": dummy_channels}
