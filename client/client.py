@@ -31,14 +31,13 @@ def main(
         name="client"
     )
 
+    # create sources for each one of the detectors
     sources = {}
     for state_name, shape in client.states.items():
         try:
+            # get the detector name from the state name
             name = re.search("(?<=deepclean_)[hl]", state_name).group(0)
-            if name == "h":
-                name = "hanford"
-            else:
-                name = "livingston"
+            name = "hanford" if name == "h" else "livingston"
         except AttributeError:
             # not for deepclean, so this is what we'll name
             # the dualdetector generator for the strain channel
@@ -54,10 +53,12 @@ def main(
             prefix=prefix,
             name=state_name
         )
+
+    # combine sources into one that splits out strain
+    # channels from each detector and combines them
+    # add this multi-data source to the client
     source = DualDetectorDataGenerator(**sources)
-    pipe = client.add_data_source(
-        source, str(sequence_id), sequence_id
-    )
+    pipe = client.add_data_source(source, str(sequence_id), sequence_id)
 
     source.start()
     client.start()
@@ -67,11 +68,13 @@ def main(
             if not pipe.poll():
                 continue
             package = pipe.recv()
+
             try:
                 if isinstance(package, ExceptionWrapper):
                     package.reraise()
             except StopIteration:
                 break
+
             outputs.append(package.x)
     finally:
         client.stop()
