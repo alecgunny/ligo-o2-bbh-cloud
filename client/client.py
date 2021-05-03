@@ -12,10 +12,6 @@ from frame_reader import GCPFrameDataGenerator, DualDetectorDataGenerator
 from channels import channels
 
 
-LOG_FILE = "client.log"
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO)
-
-
 def main(
     url: str,
     model_name: str,
@@ -126,5 +122,12 @@ if __name__ == "__main__":
                 default=param.default
             )
 
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default="client.log"
+    )
     flags = parser.parse_args()
+    logging.basicConfig(filename=flags.log_file, level=logging.INFO)
+
     main(**vars(flags))
