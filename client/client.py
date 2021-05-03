@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import logging
 import re
 import time
 import typing
@@ -9,6 +10,10 @@ from stillwater import ExceptionWrapper, ThreadedMultiStreamInferenceClient
 
 from frame_reader import GCPFrameDataGenerator, DualDetectorDataGenerator
 from channels import channels
+
+
+LOG_FILE = "client.log"
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO)
 
 
 def main(
@@ -42,6 +47,7 @@ def main(
             # not for deepclean, so this is what we'll name
             # the dualdetector generator for the strain channel
             sources["name"] = state_name
+            continue
 
         sources[name] = GCPFrameDataGenerator(
             bucket_name=bucket_name,
@@ -60,10 +66,10 @@ def main(
     source = DualDetectorDataGenerator(**sources)
     pipe = client.add_data_source(source, str(sequence_id), sequence_id)
 
-    source.start()
     client.start()
     try:
         outputs = []
+        logging.info("Starting client")
         while True:
             if not pipe.poll():
                 continue
@@ -73,13 +79,17 @@ def main(
                 if isinstance(package, ExceptionWrapper):
                     package.reraise()
             except StopIteration:
+                logging.info("StopIteration raised, exiting elegantly")
                 break
 
-            outputs.append(package.x)
+            outputs.append(package["prob"].x[0, 0])
     finally:
         client.stop()
 
-        source.join(10)
+        for name, source in sources.items():
+            if name != "name":
+                source.stop()
+
         client.join(10)
         try:
             client.close()
@@ -89,6 +99,7 @@ def main(
             client.close()
 
         outputs = np.array(outputs)
+        logging.info("Saving {} predictions".format(len(outputs)))
         np.save("outputs.npy", outputs)
 
 

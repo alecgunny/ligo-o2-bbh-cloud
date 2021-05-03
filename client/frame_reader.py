@@ -75,7 +75,7 @@ def _eager_put(q, x, event):
 
 
 @_catch_wrap_and_put
-def _download_and_write_frames(q, blobs, stop_event):
+def _download_and_write_frames(q, blobs, stop_event, name):
     for blob in blobs:
         if not blob.name.endswith(".gwf"):
             continue
@@ -94,9 +94,11 @@ def _download_and_write_frames(q, blobs, stop_event):
         # and this could be as time consuming
         if stop_event.is_set():
             break
-        with open(timestamp + ".gwf", "wb") as f:
+
+        fname = timestamp + "-" + name.replace("/", "-") + ".gwf"
+        with open(fname, "wb") as f:
             f.write(blob_bytes)
-        q.put(int(timestamp))
+        q.put(fname)
 
 
 @_catch_wrap_and_put
@@ -107,6 +109,7 @@ def read_frames(
     sample_rate,
     channels,
     chunk_size,
+    name,
     prefix=None
 ):
     client = storage.Client()
@@ -126,18 +129,21 @@ def read_frames(
     loader_q = mp.Queue(maxsize=2)
     loader_event = mp.Event()
     loader = mp.Process(
-        target=_download_and_write_frames, args=(loader_q, blobs, loader_event)
+        target=_download_and_write_frames,
+        args=(loader_q, blobs, loader_event, name)
     )
     loader.start()
     time.sleep(0.1)
 
     try:
-        while True:
-            timestamp = _eager_get(loader_q, loader)
-
-            fname = str(timestamp) + ".gwf"
+        while not stop_event.is_set():
+            fname = _eager_get(loader_q, loader)
+            timestamp = int(fname.split("-")[0])
             start = timestamp + 0
             while start < timestamp + 4096:
+                if stop_event.is_set():
+                    break
+
                 end = min(start + chunk_size, timestamp + 4096)
                 timeseries = TimeSeriesDict.read(
                     fname,
@@ -150,11 +156,11 @@ def read_frames(
                 timeseries.resample(sample_rate)
                 frame = np.stack(
                     [timeseries[channel].value for channel in channels]
-                )
+                ).astype("float32")
 
                 if not _eager_put(q, frame, stop_event):
                     break
-                start += 4096
+                start += chunk_size
             os.remove(fname)
     finally:
         loader_event.set()
@@ -184,9 +190,10 @@ class GCPFrameDataGenerator:
         self._idx = 0
         self._step = int(self.kernel_stride * self.sample_rate)
 
-    def __iter__(self):
         self._q = mp.Queue(maxsize=100)
         self._stop_event = mp.Event()
+
+    def __iter__(self):
         self._frame_reader = mp.Process(
             target=read_frames,
             args=(
@@ -196,6 +203,7 @@ class GCPFrameDataGenerator:
                 self.sample_rate,
                 self.channels,
                 self.chunk_size,
+                self.name,
                 self.prefix
             )
         )
@@ -242,12 +250,15 @@ class GCPFrameDataGenerator:
 
     def stop(self):
         self._stop_event.set()
-        if self._frame_reader.is_alive():
-            self._frame_reader.join(0.5)
-            try:
-                self._frame_reader.close()
-            except ValueError:
-                self._frame_reader.terminate()
+        try:
+            if self._frame_reader.is_alive():
+                self._frame_reader.join(0.5)
+                try:
+                    self._frame_reader.close()
+                except ValueError:
+                    self._frame_reader.terminate()
+        except AttributeError:
+            pass
 
 
 @attr.s(auto_attribs=True)
@@ -256,14 +267,28 @@ class DualDetectorDataGenerator:
     livingston: GCPFrameDataGenerator
     name: str
 
+    def __attrs_post_init__(self):
+        self._iterators = None
+
     def __iter__(self):
+        self._iterators = []
+        for detector in [self.hanford, self.livingston]:
+            self._iterators.append(iter(detector))
         return self
 
     def __next__(self):
+        if self._iterators is None:
+            raise ValueError("Iterators not initialized")
+
         packages = {}
         strains, t0 = [], 0
-        for detector in [self.hanford, self.livingston]:
-            package = next(detector)
+        for detector in self._iterators:
+            try:
+                package = next(detector)
+            except StopIteration:
+                self._iterators = None
+                raise
+
             strains.append(package.x[0])
             t0 += package.t0
 
