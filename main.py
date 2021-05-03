@@ -58,7 +58,6 @@ def main(
 
             # deploy all the triton server instances
             # on to the nodes in our node pool
-            client_vms = []
             for i in range(num_nodes):
                 values["name"] = f"tritonserver-{i}"
                 with cloud.deploy_file(deploy_file, values=values) as f:
@@ -80,7 +79,6 @@ def main(
             # now make sure all the clients have come online
             for instance in client_manager.instances:
                 instance.wait_until_ready()
-
 
 
 if __name__ == "__main__":

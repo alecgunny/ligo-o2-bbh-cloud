@@ -127,6 +127,7 @@ class ClientVMManager:
             self.connection
         )
         self.instances.insert(idx, instance)
+        return instance
 
     def create_instances(self, N, vcpus):
         for _ in range(N):
