@@ -10,7 +10,7 @@ if [[ "$cmd" == "install" ]]; then
     $HOME/conda/bin/conda init
     rm $HOME/miniconda.sh
 elif [[ "$cmd" == "create" ]]; then
-    conda env create -f environment.yaml
+    conda env create -yq -f environment.yaml
 elif [[ "$cmd" == "run" ]]; then
     conda activate o2
     python client.py "$@"

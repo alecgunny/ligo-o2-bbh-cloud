@@ -151,6 +151,9 @@ class ClientVMInstance:
         """
         with self.conn.connect(self) as client:
             stdin, stdout, stderr = client.exec_command(cmd)
+            err = stderr.read().decode()
+            if err:
+                raise RuntimeError(f"Command {cmd} failed with message {err}")
             return stdout.read().decode()
 
     def get(self, filename: str, target: typing.Optional[str] = None) -> None:
@@ -191,6 +194,7 @@ class ClientVMInstance:
                 disks=[
                     compute.AttachedDisk(
                         boot=True,
+                        auto_delete=True,
                         initialize_params=compute.AttachedDiskInitializeParams(
                             source_image=(
                                 "projects/debian-cloud/global/"
