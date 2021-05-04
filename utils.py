@@ -1,8 +1,6 @@
 from multiprocessing import dummy as mp
 from queue import Empty
 
-from stillwater.utils import ExceptionWrapper
-
 
 def configure_vm(vm):
     package = "ligo-o2-bbh-cloud"
@@ -15,9 +13,10 @@ def configure_vm(vm):
     for cmd in cmds:
         our, err = vm.run(cmd)
         if err:
-            raise RuntimeError(
-                f"Command {cmd} failed with message {err}"
-            )
+            print(cmd, err)
+            # raise RuntimeError(
+            #     f"Command {cmd} failed with message {err}"
+            # )
 
 
 def configure_vms_parallel(vms):
@@ -27,7 +26,7 @@ def configure_vms_parallel(vms):
         try:
             configure_vm(vm)
         except Exception as e:
-            error_q.put(ExceptionWrapper(e))
+            error_q.put(str(e))
 
     with mp.Pool(len(vms)) as pool:
         pool.map(configure_vm, vms, chunksize=1)
@@ -38,4 +37,4 @@ def configure_vms_parallel(vms):
     except Empty:
         return
     else:
-        e.reraise()
+        raise RuntimeError(e)

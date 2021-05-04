@@ -9,7 +9,7 @@ init() {
     # this line below should be written in giant
     # letters on the masthead of Anaconda's
     # documentation, but alas
-    source $CONDA_PREFX/etc/profile.d/conda.sh
+    source $CONDA_PREFIX/etc/profile.d/conda.sh
     cd "${0%/*}"
 }
 
