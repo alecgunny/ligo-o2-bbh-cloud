@@ -153,9 +153,7 @@ class ClientVMInstance:
             stdin, stdout, stderr = client.exec_command(cmd)
             err = stderr.read().decode()
             out = stdout.read().decode()
-            # if err:
-            #     raise RuntimeError(f"Command {cmd} failed with message {err}")
-            return f"stdout: {out}, stderr: {err}"
+            return out, err
 
     def get(self, filename: str, target: typing.Optional[str] = None) -> None:
         """
@@ -248,13 +246,13 @@ class ClientVMInstance:
 
         def _callback():
             try:
-                output = self.run("cat /var/log/daemon.log")
+                output, _ = self.run("cat /var/log/daemon.log")
             except (
                 paramiko.ssh_exception.NoValidConnectionsError,
                 paramiko.ssh_exception.AuthenticationException
             ):
                 if time.time() - start_time > 60:
-                    raise RuntimeError("Couldn't connect to vm instance")
+                    raise RuntimeError("Couldn't connect to VM instance")
                 return False
             except EOFError:
                 return False

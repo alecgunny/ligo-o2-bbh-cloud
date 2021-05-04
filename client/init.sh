@@ -3,15 +3,31 @@
 cmd="$1"
 shift
 
+CONDA_PREFIX=$HOME/conda
+
+init() {
+    # this line below should be written in giant
+    # letters on the masthead of Anaconda's
+    # documentation, but alas
+    source $CONDA_PREFX/etc/profile.d/conda.sh
+    cd "${0%/*}"
+}
+
+
 if [[ "$cmd" == "install" ]]; then
     wget -q -O $HOME/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-    bash $HOME/miniconda.sh -b -p $HOME/conda
-    $HOME/conda/bin/conda update -q -n base -y conda
-    $HOME/conda/bin/conda init
+    bash $HOME/miniconda.sh -b -p $CONDA_PREFIX
+    $CONDA_PREFIX/bin/conda update -q -n base -y conda
+    $CONDA_PREFIX/bin/conda init
     rm $HOME/miniconda.sh
 elif [[ "$cmd" == "create" ]]; then
-    $HOME/conda/bin/conda env create -q -f environment.yaml
+    init
+    conda env create -q -f environment.yaml
+elif [[ "$cmd" == "list" ]]; then
+    init
+    conda list
 elif [[ "$cmd" == "run" ]]; then
-    source activate o2
+    init
+    conda activate o2
     python client.py "$@"
 fi
