@@ -11,12 +11,11 @@ def configure_vm(vm):
     ]
 
     for cmd in cmds:
-        our, err = vm.run(cmd)
+        _, err = vm.run(cmd)
         if err:
-            print(cmd, err)
-            # raise RuntimeError(
-            #     f"Command {cmd} failed with message {err}"
-            # )
+            raise RuntimeError(
+                f"Command {cmd} failed with message {err}"
+            )
 
 
 def configure_vms_parallel(vms):
@@ -29,8 +28,8 @@ def configure_vms_parallel(vms):
             error_q.put(str(e))
 
     with mp.Pool(len(vms)) as pool:
-        pool.map(configure_vm, vms, chunksize=1)
-        pool.join()
+        pool.map(f, vms, chunksize=1)
+    pool.join()
 
     try:
         e = error_q.get_nowait()

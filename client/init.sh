@@ -16,9 +16,9 @@ init() {
 
 if [[ "$cmd" == "install" ]]; then
     wget -q -O $HOME/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-    bash $HOME/miniconda.sh -b -p $CONDA_PREFIX
-    $CONDA_PREFIX/bin/conda update -q -n base -y conda
-    $CONDA_PREFIX/bin/conda init
+    bash $HOME/miniconda.sh -b -p $CONDA_PREFIX 2>/dev/null
+    $CONDA_PREFIX/bin/conda update -q -n base -y conda 2>/dev/null
+    $CONDA_PREFIX/bin/conda init 2>/dev/null
     rm $HOME/miniconda.sh
 elif [[ "$cmd" == "create" ]]; then
     init
