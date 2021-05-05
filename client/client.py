@@ -127,7 +127,7 @@ if __name__ == "__main__":
         type=str,
         default="client.log"
     )
-    flags = parser.parse_args()
-    logging.basicConfig(filename=flags.log_file, level=logging.INFO)
+    flags = vars(parser.parse_args())
+    logging.basicConfig(filename=flags.pop("log_file"), level=logging.INFO)
 
-    main(**vars(flags))
+    main(**flags)
