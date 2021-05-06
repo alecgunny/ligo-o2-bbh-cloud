@@ -1,8 +1,13 @@
 import argparse
 import os
+import re
+import time
 
 import cloud_utils as cloud
 import gcp
+from google.cloud.storage import Client as StorageClient
+
+import utils
 
 
 def main(
@@ -12,15 +17,42 @@ def main(
     project,
     zone,
     cluster_name,
+    data_bucket_name,
+    model_repo_bucket_name,
     num_nodes,
     gpus_per_node,
     vcpus_per_gpu,
-    clients_per_node,
+    kernel_stride,
     generation_rate
 ):
     cluster_manager = cloud.GKEClusterManager(
         project=project, zone=zone, credentials=service_account_key_file
     )
+
+    # first figure out how many clients we'll need based
+    # on the number of files that we have to go through
+    storage_client = StorageClient.from_service_account_json(
+        service_account_key_file
+    )
+    data_bucket = storage_client.get_bucket(data_bucket_name)
+    blobs = data_bucket.list_blobs(
+        prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854"
+    )
+    clients_per_node = (len(blobs) - 1) // num_nodes + 1
+
+    # set up the Triton snapshotter config so that the
+    # appropriate number of snapshot instances are available
+    # on each node
+    streams_per_gpu = (clients_per_node - 1) // gpus_per_node + 1
+    model_repo_bucket = storage_client.get_bucket(model_repo_bucket_name)
+    blob = model_repo_bucket.get_blob(
+        f"kernel-stride-{kernel_stride}_snapshotter/config.pbtxt"
+    )
+    config_str = blob.download_as_bytes.decode()
+    config_str = re.sub(
+        "\n  count: [0-9]+\n", f"\n  count: {streams_per_gpu}\n", config_str
+    )
+    blob.upload_from_string(config_str)
 
     client_connection = gcp.VMConnection(username, ssh_key_file)
     client_manager = gcp.ClientVMManager(
@@ -66,7 +98,9 @@ def main(
                 # spin up client vms for each instance
                 for j in range(clients_per_node):
                     idx = i * clients_per_node + j
-                    client_manager.create_instance(idx, 8)
+                    if idx < len(blobs):
+                        client_manager.create_instance(idx, 8)
+            utils.configure_vms_parallel(client_manager.instances)
 
             # now wait for all the deployments to come online
             # and grab the associated IPs of their load balancers
@@ -74,11 +108,33 @@ def main(
             for i in range(num_nodes):
                 cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
                 ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
-                server_ips.append(ip)
+                for j in range(clients_per_node):
+                    server_ips.append(ip)
 
-            # now make sure all the clients have come online
-            for instance in client_manager.instances:
-                instance.wait_until_ready()
+            runner = utils.RunParallel(
+                model_name=f"kernel-stride-{kernel_stride}_gwe2e",
+                model_version=1,
+                generation_rate=1000,
+                sequence_id=1001,
+                bucket_name=data_bucket_name,
+                kernel_stride=kernel_stride,
+                sample_rate=4000,
+                chunk_size=256
+            )
+
+            start_time = time.time()
+            runner(
+                client_manager.instances, [i.name for i in blobs], server_ips
+            )
+            end_time = time.time()
+
+            delta = end_time - start_time
+            throughput = 4096 * len(blobs) / (kernel_stride * delta)
+            print(
+                "Predicted on {} s worth of data in "
+                "{:0.1f} s, throughput {0.2f}".format(
+                    4096 * len(blobs), delta, throughput)
+            )
 
 
 if __name__ == "__main__":

@@ -28,27 +28,33 @@ class VMConnection:
     sleep_between_connections: typing.Optional[float] = 1.0
 
     def __attrs_post_init__(self):
-        self._last_time = time.time()
-        self._last_ip = None
+        self._last_times = {}
 
     def connection(self, instance: "ClientVMInstance"):
-        if self._last_ip == instance.ip:
-            while (
-                (time.time() - self._last_time) < self.sleep_between_connections
-            ):
-                time.sleep(0.01)
+        try:
+            last_time = self._last_times[instance.ip]
+            while (time.time() - last_time) < self.sleep_between_connections:
+                time.sleep(0.1)
+        except KeyError:
+            self._last_times[instance.ip] = time.time()
 
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.client.AutoAddPolicy())
-        client.connect(
-            username=self.username,
-            hostname=instance.ip,
-            key_filename=self.ssh_key_file
-        )
 
-        self._last_ip = instance.ip
-        self._last_time = time.time()
+        for i in range(5):
+            try:
+                client.connect(
+                    username=self.username,
+                    hostname=instance.ip,
+                    key_filename=self.ssh_key_file
+                )
+                break
+            except Exception:
+                time.sleep(1)
+        else:
+            raise RuntimeError("Something bad happened!")
 
+        self._last_times[instance.ip] = time.time()
         return client
 
     @contextmanager
@@ -241,7 +247,7 @@ class ClientVMInstance:
             ip = vm_config.network_interfaces[0].access_configs[0].nat_i_p
         return cls(name=name, ip=ip, conn=connection)
 
-    def wait_until_ready(self, timeout=300):
+    def wait_until_ready(self, timeout=300, verbose=True):
         start_time = time.time()
 
         def _callback():
@@ -263,8 +269,12 @@ class ClientVMInstance:
                 return False
             return True
 
-        wait_for(
-            _callback,
-            f"Waiting for VM {self.name} to be ready at IP {self.ip}",
-            f"VM {self.name} ready"
-        )
+        if verbose:
+            wait_for(
+                _callback,
+                f"Waiting for VM {self.name} to be ready at IP {self.ip}",
+                f"VM {self.name} ready"
+            )
+        else:
+            while not _callback():
+                time.sleep(0.5)
