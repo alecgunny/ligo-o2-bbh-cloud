@@ -5,6 +5,8 @@ from cloud_utils.utils import wait_for
 
 
 _PACKAGE = "ligo-o2-bbh-cloud"
+_PACKAGE_URL = f"https://github.com/alecgunny/{_PACKAGE}.git"
+_RUN = f"./{_PACKAGE}/client/run.sh"
 
 
 def _run_in_pool(fn, args, msg, exit_msg):
@@ -33,12 +35,7 @@ def _run_in_pool(fn, args, msg, exit_msg):
 def configure_vm(vm):
     vm.wait_until_ready(verbose=False)
 
-    cmds = [
-        f"git clone -q https://github.com/alecgunny/{_PACKAGE}.git",
-        f"./{_PACKAGE}/client/init.sh install",
-        f"./{_PACKAGE}/client/init.sh create",
-    ]
-
+    cmds = [f"git clone -q {_PACKAGE_URL}", f"{_RUN} install", f"{_RUN} create"]
     for cmd in cmds:
         _, err = vm.run(cmd)
         if err:
@@ -67,7 +64,7 @@ class RunParallel:
 
     @property
     def command(self):
-        command = f"./{_PACKAGE}/client/init.sh run"
+        command = f"{_RUN} run"
         for a in self.__attrs_attrs__:
             if a.name != "sequence_id":
                 command += "--{} {}".format(
