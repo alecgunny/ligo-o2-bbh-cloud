@@ -21,6 +21,7 @@ def main(
     model_repo_bucket_name,
     num_nodes,
     gpus_per_node,
+    instances_per_gpu,
     vcpus_per_gpu,
     kernel_stride,
     generation_rate
@@ -45,14 +46,24 @@ def main(
     # on each node
     streams_per_gpu = (clients_per_node - 1) // gpus_per_node + 1
     model_repo_bucket = storage_client.get_bucket(model_repo_bucket_name)
-    blob = model_repo_bucket.get_blob(
-        f"kernel-stride-{kernel_stride}_snapshotter/config.pbtxt"
-    )
-    config_str = blob.download_as_bytes.decode()
-    config_str = re.sub(
-        "\n  count: [0-9]+\n", f"\n  count: {streams_per_gpu}\n", config_str
-    )
-    blob.upload_from_string(config_str)
+    model_prefix = f"kernel-stride-{kernel_stride}_"
+    for blob in model_repo_bucket.list_blobs(prefix=model_prefix):
+        if not blob.name.endswith("config.pbtxt"):
+            continue
+
+        model_name = re.search(
+            f"(?<={model_prefix}).+(?=/config.pbtxt)", blob.name
+        ).group(0)
+        if model_name == "snapshotter":
+            count = streams_per_gpu
+        else:
+            count = instances_per_gpu
+
+        config_str = blob.download_as_bytes().decode()
+        config_str = re.sub(
+            "\n  count: [0-9]+\n", f"\n  count: {count}\n", config_str
+        )
+        blob.upload_from_string(config_str)
 
     client_connection = gcp.VMConnection(username, ssh_key_file)
     client_manager = gcp.ClientVMManager(
@@ -83,10 +94,12 @@ def main(
         )
         with cluster.manage_resource(node_pool_config):
             values = {
-                "numGPUs": gpus_per_node,
-                "tritonTag": "20.11"
+                "gpus": gpus_per_node,
+                "tag": "20.11",
+                "vcpus": vcpus_per_node - 1,
+                "repo": model_repo_bucket_name,
             }
-            deploy_file = os.path.join("apps", "deploy.yaml")
+            deploy_file = os.path.join("apps", "tritonserver.yaml")
 
             # deploy all the triton server instances
             # on to the nodes in our node pool
