@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import os
 import re
 import time
@@ -11,20 +12,20 @@ import utils
 
 
 def main(
-    service_account_key_file,
-    ssh_key_file,
-    username,
-    project,
-    zone,
-    cluster_name,
-    data_bucket_name,
-    model_repo_bucket_name,
-    num_nodes,
-    gpus_per_node,
-    instances_per_gpu,
-    vcpus_per_gpu,
-    kernel_stride,
-    generation_rate
+    service_account_key_file: str,
+    ssh_key_file: str,
+    username: str,
+    project: str,
+    zone: str,
+    cluster_name: str,
+    data_bucket_name: str,
+    model_repo_bucket_name: str,
+    num_nodes: int,
+    gpus_per_node: int,
+    instances_per_gpu: int,
+    vcpus_per_gpu: int,
+    kernel_stride: float,
+    generation_rate: float
 ):
     cluster_manager = cloud.GKEClusterManager(
         project=project, zone=zone, credentials=service_account_key_file
@@ -152,72 +153,26 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--service-account-key-file",
-        type=str,
-        required=True,
-        help="Path to service account json"
-    )
-    parser.add_argument(
-        "--ssh-key-file",
-        type=str,
-        required=True,
-        help="Path to key for connecting to client VMs"
-    )
-    parser.add_argument(
-        "--username",
-        type=str,
-        required=True,
-        help="Username for connecting to client VMs"
-    )
-    parser.add_argument(
-        "--project",
-        type=str,
-        required=True,
-        help="GCP project for billing"
-    )
-    parser.add_argument(
-        "--zone",
-        type=str,
-        required=True,
-        help="GCP zone for running all resources"
-    )
-    parser.add_argument(
-        "--cluster-name",
-        type=str,
-        required=True,
-        help="Name of GKE cluster for hosting server instances"
-    )
-    parser.add_argument(
-        "--num-nodes",
-        type=int,
-        default=1,
-        help="Number of server instances to leverage"
-    )
-    parser.add_argument(
-        "--gpus-per-node",
-        type=int,
-        default=1,
-        help="Number of GPUs per server instance"
-    )
-    parser.add_argument(
-        "--vcpus-per-gpu",
-        type=int,
-        default=8,
-        help="Number of VCPUs to assign per GPU on server instances"
-    )
-    parser.add_argument(
-        "--clients-per-node",
-        type=int,
-        default=1,
-        help="Number of client instances per server instance"
-    )
-    parser.add_argument(
-        "--generation-rate",
-        type=float,
-        default=800,
-        help="Rate at which each client instance sends data to server"
-    )
+    for name, param in inspect.signature(main).parameters.items():
+        annotation = param.annotation
+        try:
+            type_ = annotation.__args__[0]
+        except AttributeError:
+            type_ = annotation
+
+        name = name.replace("_", "-")
+        if param.default is inspect._empty:
+            parser.add_argument(
+                f"--{name}",
+                type=type_,
+                required=True
+            )
+        else:
+            parser.add_argument(
+                f"--{name}",
+                type=type_,
+                default=param.default
+            )
 
     flags = parser.parse_args()
     main(**vars(flags))
