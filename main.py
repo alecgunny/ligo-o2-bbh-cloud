@@ -5,9 +5,10 @@ import re
 import time
 
 import cloud_utils as cloud
-import gcp
+from google.cloud import container_v1 as container
 from google.cloud.storage import Client as StorageClient
 
+import gcp
 import utils
 
 
@@ -40,7 +41,9 @@ def main(
     blobs = data_bucket.list_blobs(
         prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854"
     )
-    clients_per_node = (len(blobs) - 1) // num_nodes + 1
+    blob_names = [blob.name for blob in blobs]
+    num_blobs = len(blob_names)
+    clients_per_node = (num_blobs - 1) // num_nodes + 1
 
     # set up the Triton snapshotter config so that the
     # appropriate number of snapshot instances are available
@@ -64,7 +67,11 @@ def main(
         config_str = re.sub(
             "\n  count: [0-9]+\n", f"\n  count: {count}\n", config_str
         )
-        blob.upload_from_string(config_str)
+
+        blob_name = blob.name
+        blob.delete()
+        blob = model_repo_bucket.blob(blob_name)
+        blob.upload_from_string(config_str, content_type="application/octet-stream")
 
     client_connection = gcp.VMConnection(username, ssh_key_file)
     client_manager = gcp.ClientVMManager(
@@ -75,15 +82,15 @@ def main(
         connection=client_connection
     )
 
-    cluster_config = cloud.container.Cluster(
+    cluster_resource = container.Cluster(
         name=cluster_name,
-        node_pools=[cloud.container.NodePool(
+        node_pools=[container.NodePool(
             name="default-pool",
             initial_node_count=2,
-            config=cloud.container.NodeConfig()
+            config=container.NodeConfig()
         )]
     )
-    with cluster_manager.manage_resource(cluster_config) as cluster:
+    with cluster_manager.manage_resource(cluster_resource) as cluster:
         cluster.deploy_gpu_drivers()
 
         vcpus_per_node = vcpus_per_gpu * gpus_per_node
@@ -91,9 +98,13 @@ def main(
             vcpus=vcpus_per_node,
             gpus=gpus_per_node,
             gpu_type="t4",
-            num_initial_nodes=num_nodes
         )
-        with cluster.manage_resource(node_pool_config):
+        node_pool_resource = container.NodePool(
+            name="tritonserver-t4-pool",
+            initial_node_count=num_nodes,
+            config=node_pool_config
+        )
+        with cluster.manage_resource(node_pool_resource):
             values = {
                 "gpus": gpus_per_node,
                 "tag": "20.11",
@@ -112,7 +123,7 @@ def main(
                 # spin up client vms for each instance
                 for j in range(clients_per_node):
                     idx = i * clients_per_node + j
-                    if idx < len(blobs):
+                    if idx < num_blobs:
                         client_manager.create_instance(idx, 8)
             utils.configure_vms_parallel(client_manager.instances)
 
@@ -137,17 +148,15 @@ def main(
             )
 
             start_time = time.time()
-            runner(
-                client_manager.instances, [i.name for i in blobs], server_ips
-            )
+            runner(client_manager.instances, blob_names, server_ips)
             end_time = time.time()
 
             delta = end_time - start_time
-            throughput = 4096 * len(blobs) / (kernel_stride * delta)
+            throughput = 4096 * num_blobs / (kernel_stride * delta)
             print(
                 "Predicted on {} s worth of data in "
                 "{:0.1f} s, throughput {0.2f}".format(
-                    4096 * len(blobs), delta, throughput)
+                    4096 * num_blobs, delta, throughput)
             )
 
 
