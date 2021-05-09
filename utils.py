@@ -67,11 +67,11 @@ class RunParallel:
         command = f"{_RUN} run"
         for a in self.__attrs_attrs__:
             if a.name != "sequence_id":
-                command += "--{} {}".format(
+                command += " --{} {}".format(
                     a.name.replace("_", "-"), self.__dict__[a.name]
                 )
         return command + (
-            " --url {ip}:8001 --sequence_id {sequence_id} --prefix {prefix}"
+            " --url {ip}:8001 --sequence-id {sequence_id} --prefix {prefix}"
         )
 
     def run_on_vm(self, vm, fname, ip, sequence_id):
@@ -80,7 +80,7 @@ class RunParallel:
             sequence_id=sequence_id,
             prefix=fname
         )
-        _, err = vm.run(command)
+        out, err = vm.run(command)
 
         # parse out framecpp stderr info
         lines = []

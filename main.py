@@ -137,7 +137,7 @@ def main(
                     server_ips.append(ip)
 
             runner = utils.RunParallel(
-                model_name=f"kernel-stride-{kernel_stride}_gwe2e",
+                model_name="gwe2e",
                 model_version=1,
                 generation_rate=1000,
                 sequence_id=1001,
@@ -155,7 +155,7 @@ def main(
             throughput = 4096 * num_blobs / (kernel_stride * delta)
             print(
                 "Predicted on {} s worth of data in "
-                "{:0.1f} s, throughput {0.2f}".format(
+                "{:0.1f} s, throughput {:0.2f}".format(
                     4096 * num_blobs, delta, throughput)
             )
 

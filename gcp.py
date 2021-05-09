@@ -139,6 +139,16 @@ class ClientVMManager:
         for _ in range(N):
             self.create_instance(vcpus)
 
+    def delete_instances(self):
+        client = compute.InstancesClient(credentials=self.credentials)
+        for instances in self.instances:
+            delete_request = compute.DeleteInstanceRequest(
+                name=instance.name,
+                project=self.project,
+                zone=self.zone,
+            )
+            client.delete(delete_request)
+
 
 @attr.s(auto_attribs=True)
 class ClientVMInstance:
