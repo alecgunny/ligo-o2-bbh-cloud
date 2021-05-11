@@ -3,6 +3,7 @@ import inspect
 import os
 import re
 import time
+import typing
 
 import cloud_utils as cloud
 from google.cloud import container_v1 as container
@@ -10,6 +11,70 @@ from google.cloud.storage import Client as StorageClient
 
 import gcp
 import utils
+
+
+def update_model_configs(
+    client: StorageClient,
+    model_repo_bucket_name: str,
+    streams_per_gpu: int,
+    instances_per_gpu: int
+):
+    model_repo_bucket = client.get_bucket(model_repo_bucket_name)
+    for blob in model_repo_bucket.list_blobs():
+        if not blob.name.endswith("config.pbtxt"):
+            continue
+
+        model_name = blob.name.split("/")[0]
+        if model_name == "snapshotter":
+            count = streams_per_gpu
+        else:
+            count = instances_per_gpu
+
+        config_str = blob.download_as_bytes().decode()
+        config_str = re.sub(
+            "\n  count: [0-9]+\n", f"\n  count: {count}\n", config_str
+        )
+
+        blob_name = blob.name
+        blob.delete()
+        blob = model_repo_bucket.blob(blob_name)
+        blob.upload_from_string(
+            config_str, content_type="application/octet-stream"
+        )
+
+
+def configure_wait_and_run(
+    cluster: cloud.gke.Cluster,
+    client_manager: gcp.ClientVMManager,
+    runner: utils.RunParallel,
+    num_nodes: int,
+    clients_per_node: int,
+    blob_names: typing.List[str]
+):
+    utils.configure_vms_parallel(client_manager.instances)
+
+    # now wait for all the deployments to come online
+    # and grab the associated IPs of their load balancers
+    server_ips = []
+    for i in range(num_nodes):
+        cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
+        ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
+        for j in range(clients_per_node):
+            server_ips.append(ip)
+
+    models = [
+        "gwe2e", "snapshotter", "deepclean_h", "deepclean_l", "postproc", "bbh"
+    ]
+
+    start_time = time.time()
+    with utils.ServerMonitor(
+        list(set(server_ips)), "server-stats.csv", models
+    ) as monitor:
+        runner(client_manager.instances, blob_names, server_ips)
+        end_time = time.time()
+
+    monitor.check()
+    return end_time - start_time
 
 
 def main(
@@ -33,10 +98,10 @@ def main(
     )
 
     # first figure out how many clients we'll need based
-    # on the number of files that we have to go through
-    storage_client = StorageClient.from_service_account_json(
-        service_account_key_file
-    )
+    # on the number of files that we have to go through,
+    # assuming (as we are right now) that it's one file per client
+    storage_client = StorageClient(credentials=cluster_manager.client.credentials)
+
     data_bucket = storage_client.get_bucket(data_bucket_name)
     blobs = data_bucket.list_blobs(
         prefix="archive/frames/O2/hoft_C02/H1/H-H1_HOFT_C02-11854"
@@ -49,29 +114,12 @@ def main(
     # appropriate number of snapshot instances are available
     # on each node
     streams_per_gpu = (clients_per_node - 1) // gpus_per_node + 1
-    model_repo_bucket = storage_client.get_bucket(model_repo_bucket_name)
-    model_prefix = f"kernel-stride-{kernel_stride}_"
-    for blob in model_repo_bucket.list_blobs(prefix=model_prefix):
-        if not blob.name.endswith("config.pbtxt"):
-            continue
-
-        model_name = re.search(
-            f"(?<={model_prefix}).+(?=/config.pbtxt)", blob.name
-        ).group(0)
-        if model_name == "snapshotter":
-            count = streams_per_gpu
-        else:
-            count = instances_per_gpu
-
-        config_str = blob.download_as_bytes().decode()
-        config_str = re.sub(
-            "\n  count: [0-9]+\n", f"\n  count: {count}\n", config_str
-        )
-
-        blob_name = blob.name
-        blob.delete()
-        blob = model_repo_bucket.blob(blob_name)
-        blob.upload_from_string(config_str, content_type="application/octet-stream")
+    update_model_configs(
+        storage_client,
+        model_repo_bucket_name,
+        streams_per_gpu,
+        instances_per_gpu
+    )
 
     client_connection = gcp.VMConnection(username, ssh_key_file)
     client_manager = gcp.ClientVMManager(
@@ -125,39 +173,32 @@ def main(
                     idx = i * clients_per_node + j
                     if idx < num_blobs:
                         client_manager.create_instance(idx, 8)
-            utils.configure_vms_parallel(client_manager.instances)
 
-            # now wait for all the deployments to come online
-            # and grab the associated IPs of their load balancers
-            server_ips = []
-            for i in range(num_nodes):
-                cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
-                ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
-                for j in range(clients_per_node):
-                    server_ips.append(ip)
-
-            runner = utils.RunParallel(
-                model_name="gwe2e",
-                model_version=1,
-                generation_rate=1000,
-                sequence_id=1001,
-                bucket_name=data_bucket_name,
-                kernel_stride=kernel_stride,
-                sample_rate=4000,
-                chunk_size=256
-            )
-
-            start_time = time.time()
-            runner(client_manager.instances, blob_names, server_ips)
-            end_time = time.time()
-
-            delta = end_time - start_time
-            throughput = 4096 * num_blobs / (kernel_stride * delta)
-            print(
-                "Predicted on {} s worth of data in "
-                "{:0.1f} s, throughput {:0.2f}".format(
-                    4096 * num_blobs, delta, throughput)
-            )
+            with client_manager as client_manager:
+                runner = utils.RunParallel(
+                    model_name="gwe2e",
+                    model_version=1,
+                    generation_rate=1000,
+                    sequence_id=1001,
+                    bucket_name=data_bucket_name,
+                    kernel_stride=kernel_stride,
+                    sample_rate=4000,
+                    chunk_size=256
+                )
+                delta = configure_wait_and_run(
+                    cluster,
+                    client_manager,
+                    runner,
+                    num_nodes,
+                    clients_per_node,
+                    blob_names
+                )
+                throughput = 4096 * num_blobs / (kernel_stride * delta)
+                print(
+                    "Predicted on {} s worth of data in "
+                    "{:0.1f} s, throughput {:0.2f}".format(
+                        4096 * num_blobs, delta, throughput)
+                )
 
 
 if __name__ == "__main__":

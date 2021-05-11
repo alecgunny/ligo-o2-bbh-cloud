@@ -124,6 +124,14 @@ class ClientVMManager:
         return credentials
 
     def create_instance(self, idx: int, vcpus: int):
+        name = f"{self.prefix}-{idx}"
+        try:
+
+            vm = [vm for vm in self.instances if vm.name == name][0]
+            return vm
+        except IndexError:
+            pass
+
         instance = ClientVMInstance.create(
             self.prefix + "-" + str(idx),
             self.project,
@@ -141,13 +149,19 @@ class ClientVMManager:
 
     def delete_instances(self):
         client = compute.InstancesClient(credentials=self.credentials)
-        for instances in self.instances:
+        for instance in self.instances:
             delete_request = compute.DeleteInstanceRequest(
-                name=instance.name,
+                instance=instance.name,
                 project=self.project,
                 zone=self.zone,
             )
             client.delete(delete_request)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_args):
+        self.delete_instances()
 
 
 @attr.s(auto_attribs=True)

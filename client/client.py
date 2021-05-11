@@ -63,22 +63,32 @@ def main(
     pipe = client.add_data_source(source, str(sequence_id), sequence_id)
 
     client.start()
+    timeout, stopped = 1, False
     try:
         outputs = []
         logging.info("Starting client")
         while True:
-            if not pipe.poll():
+            tick = time.time()
+            while (time.time() - tick) < timeout:
+                if pipe.poll():
+                    package = pipe.recv()
+                    break
+            else:
+                if stopped:
+                    logging.info("Timed out, breaking")
+                    break
                 continue
-            package = pipe.recv()
 
             try:
                 if isinstance(package, ExceptionWrapper):
                     package.reraise()
             except StopIteration:
-                logging.info("StopIteration raised, exiting elegantly")
-                break
+                logging.info("StopIteration raised")
+                stopped = True
+                continue
 
             outputs.append(package["prob"].x[0, 0])
+
     finally:
         client.stop()
 
