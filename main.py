@@ -1,11 +1,10 @@
-import argparse
-import inspect
 import os
 import re
 import time
 import typing
 
 import cloud_utils as cloud
+import typeo
 from google.cloud import container_v1 as container
 from google.cloud.storage import Client as StorageClient
 
@@ -17,7 +16,7 @@ def update_model_configs(
     client: StorageClient,
     model_repo_bucket_name: str,
     streams_per_gpu: int,
-    instances_per_gpu: int
+    instances_per_gpu: typing.Union[int, typing.Dict[str, int]]
 ):
     model_repo_bucket = client.get_bucket(model_repo_bucket_name)
     for blob in model_repo_bucket.list_blobs():
@@ -68,7 +67,9 @@ def configure_wait_and_run(
 
     start_time = time.time()
     with utils.ServerMonitor(
-        list(set(server_ips)), "server-stats.csv", models
+        list(set(server_ips)),
+        f"num-nodes={num_nodes}_server-stats.csv",
+        models
     ) as monitor:
         runner(client_manager.instances, blob_names, server_ips)
         end_time = time.time()
@@ -88,7 +89,7 @@ def main(
     model_repo_bucket_name: str,
     num_nodes: int,
     gpus_per_node: int,
-    instances_per_gpu: int,
+    instances_per_gpu: typeo.MaybeDict(int),
     vcpus_per_gpu: int,
     kernel_stride: float,
     generation_rate: float
@@ -202,27 +203,6 @@ def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    for name, param in inspect.signature(main).parameters.items():
-        annotation = param.annotation
-        try:
-            type_ = annotation.__args__[0]
-        except AttributeError:
-            type_ = annotation
-
-        name = name.replace("_", "-")
-        if param.default is inspect._empty:
-            parser.add_argument(
-                f"--{name}",
-                type=type_,
-                required=True
-            )
-        else:
-            parser.add_argument(
-                f"--{name}",
-                type=type_,
-                default=param.default
-            )
-
+    parser = typeo.make_parser(main)
     flags = parser.parse_args()
     main(**vars(flags))

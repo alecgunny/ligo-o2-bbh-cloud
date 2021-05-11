@@ -130,7 +130,7 @@ class ServerMonitor(mp.Process):
         self.models = models
 
         self.header = (
-            "step,ip,gpu_id,model,process,time (us),interval,count,utilization"
+            "ip,step,gpu_id,model,process,time (us),interval,count,utilization"
         )
         self._last_times = {}
         self._counts = {}

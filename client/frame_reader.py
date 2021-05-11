@@ -110,7 +110,7 @@ def read_frames(
     channels,
     chunk_size,
     name,
-    prefix=None
+    fnames=None
 ):
     client = storage.Client()
     try:
@@ -120,12 +120,16 @@ def read_frames(
             raise ValueError(f"Couldn't find bucket {bucket_name}")
         content = yaml.safe_load(e.response.content.decode("utf-8"))
         raise RuntimeError(
-            f"Encountered HTTPError with code {e.code} and message: "
-            + content["error"]["message"]
+            f"Encountered HTTPError with code {e.code} "
+            "and message: {}".format(content["error"]["message"])
         )
 
+    # filter out the relevant blobs up front
+    blobs = bucket.list_blobs()
+    if fnames is not None:
+        blobs = [i for i in blobs if i.name in fnames]
+
     # run the download/write in a separate process
-    blobs = bucket.list_blobs(prefix=prefix)
     loader_q = mp.Queue(maxsize=2)
     loader_event = mp.Event()
     loader = mp.Process(
@@ -181,7 +185,7 @@ class GCPFrameDataGenerator:
     kernel_stride: float
     chunk_size: float
     generation_rate: typing.Optional[float] = None
-    prefix: typing.Optional[str] = None
+    fnames: typing.Optional[typing.List[str]] = None
     name: typing.Optional[str] = None
 
     def __attrs_post_init__(self):
@@ -204,7 +208,7 @@ class GCPFrameDataGenerator:
                 self.channels,
                 self.chunk_size,
                 self.name,
-                self.prefix
+                self.fnames
             )
         )
         self._frame_reader.start()

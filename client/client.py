@@ -1,11 +1,10 @@
-import argparse
-import inspect
 import logging
 import re
 import time
 import typing
 
 import numpy as np
+import typeo
 from stillwater import ExceptionWrapper, ThreadedMultiStreamInferenceClient
 
 from frame_reader import GCPFrameDataGenerator, DualDetectorDataGenerator
@@ -22,7 +21,7 @@ def main(
     kernel_stride: float,
     sample_rate: float = 4000,
     chunk_size: float = 1024,
-    prefix: typing.Optional[str] = None
+    fnames: typing.Optional[typing.List[str]] = None
 ):
     client = ThreadedMultiStreamInferenceClient(
         url=url,
@@ -51,8 +50,8 @@ def main(
             channels=channels[name],
             kernel_stride=kernel_stride,
             chunk_size=chunk_size,
+            fnames=fnames,
             generation_rate=generation_rate,
-            prefix=prefix,
             name=state_name
         )
 
@@ -110,28 +109,7 @@ def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    for name, param in inspect.signature(main).parameters.items():
-        annotation = param.annotation
-        try:
-            type_ = annotation.__args__[0]
-        except AttributeError:
-            type_ = annotation
-
-        name = name.replace("_", "-")
-        if param.default is inspect._empty:
-            parser.add_argument(
-                f"--{name}",
-                type=type_,
-                required=True
-            )
-        else:
-            parser.add_argument(
-                f"--{name}",
-                type=type_,
-                default=param.default
-            )
-
+    parser = typeo.make_parser(main)
     parser.add_argument(
         "--log-file",
         type=str,
