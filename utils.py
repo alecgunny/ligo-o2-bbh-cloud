@@ -77,14 +77,14 @@ class RunParallel:
                     a.name.replace("_", "-"), self.__dict__[a.name]
                 )
         return command + (
-            " --url {ip}:8001 --sequence-id {sequence_id} --prefix {prefix}"
+            " --url {ip}:8001 --sequence-id {sequence_id} --fnames {files}"
         )
 
-    def run_on_vm(self, vm, fname, ip, sequence_id):
+    def run_on_vm(self, vm, files, ip, sequence_id):
         command = self.command.format(
             ip=ip,
             sequence_id=sequence_id,
-            prefix=fname
+            files=" ".join(files)
         )
         out, err = vm.run(command)
 
@@ -98,7 +98,13 @@ class RunParallel:
         if err:
             raise RuntimeError(err)
 
-        fname = fname.split("/")[-1].replace("gwf", "npy")
+        tstamps = []
+        for f in files:
+            split = f.split("/")[-1].replace(".gwf", "").split("-")
+            tstamp = split[2]
+            tstamps.append(tstamp)
+        split[2] = "_".join(tstamps)
+        fname = "-".join(split).replace("gwf", "npy")
         vm.get(f"{_PACKAGE}/client/outputs.npy", fname)
 
     def __call__(self, vms, files, ips):

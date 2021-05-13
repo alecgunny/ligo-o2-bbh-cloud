@@ -16,7 +16,7 @@ def update_model_configs(
     client: StorageClient,
     model_repo_bucket_name: str,
     streams_per_gpu: int,
-    instances_per_gpu: typing.Union[int, typing.Dict[str, int]]
+    instances_per_gpu: typeo.MaybeDict(int)
 ):
     model_repo_bucket = client.get_bucket(model_repo_bucket_name)
     for blob in model_repo_bucket.list_blobs():
@@ -24,10 +24,19 @@ def update_model_configs(
             continue
 
         model_name = blob.name.split("/")[0]
-        if model_name == "snapshotter":
+        if model_name == "gwe2e":
+            continue
+        elif model_name == "snapshotter":
             count = streams_per_gpu
         else:
-            count = instances_per_gpu
+            try:
+                count = instances_per_gpu[model_name]
+            except TypeError:
+                count = instances_per_gpu
+            except KeyError:
+                raise ValueError(
+                    f"Must specify number ofinstances for model {model_name}"
+                )
 
         config_str = blob.download_as_bytes().decode()
         config_str = re.sub(
@@ -65,13 +74,29 @@ def configure_wait_and_run(
         "gwe2e", "snapshotter", "deepclean_h", "deepclean_l", "postproc", "bbh"
     ]
 
+    blobs_per_client = (len(blob_names) - 1) // clients_per_node + 1
+    client_blobs = []
+    for i in range(clients_per_node):
+        blobs_i = []
+        for j in range(blobs_per_client):
+            idx = i * blobs_per_client + j
+            try:
+                blobs_i.append(blob_names[idx])
+            except IndexError:
+                break
+        client_blobs.append(blobs_i)
+
     start_time = time.time()
     with utils.ServerMonitor(
         list(set(server_ips)),
-        f"num-nodes={num_nodes}_server-stats.csv",
+        (
+            f"num-nodes={num_nodes}_"
+            f"clients-per-node={clients_per_node}_"
+            "server-stats.csv"
+        ),
         models
     ) as monitor:
-        runner(client_manager.instances, blob_names, server_ips)
+        runner(client_manager.instances, client_blobs, server_ips)
         end_time = time.time()
 
     monitor.check()
@@ -89,6 +114,7 @@ def main(
     model_repo_bucket_name: str,
     num_nodes: int,
     gpus_per_node: int,
+    clients_per_node: int,
     instances_per_gpu: typeo.MaybeDict(int),
     vcpus_per_gpu: int,
     kernel_stride: float,
@@ -109,7 +135,6 @@ def main(
     )
     blob_names = [blob.name for blob in blobs]
     num_blobs = len(blob_names)
-    clients_per_node = (num_blobs - 1) // num_nodes + 1
 
     # set up the Triton snapshotter config so that the
     # appropriate number of snapshot instances are available
