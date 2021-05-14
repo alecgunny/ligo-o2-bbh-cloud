@@ -1,17 +1,24 @@
 import concurrent.futures
 import multiprocessing as mp
+import os
 import queue
 import re
 import time
+import typing
+from zlib import adler32
 
 import attr
 import requests
 from cloud_utils.utils import wait_for
+from typeo import MaybeDict
 
 
 _PACKAGE = "ligo-o2-bbh-cloud"
 _PACKAGE_URL = f"https://github.com/alecgunny/{_PACKAGE}.git"
 _RUN = f"./{_PACKAGE}/client/run.sh"
+_MODELS = [
+    "gwe2e", "snapshotter", "deepclean_l", "deepclean_h", "postproc", "bbh"
+]
 
 
 def _run_in_pool(fn, args, msg, exit_msg):
@@ -67,12 +74,13 @@ class RunParallel:
     kernel_stride: float
     sample_rate: float = 4000
     chunk_size: float = 1024
+    output_dir: typing.Optional[str] = None
 
     @property
     def command(self):
         command = f"{_RUN} run"
         for a in self.__attrs_attrs__:
-            if a.name != "sequence_id":
+            if a.name not in ("sequence_id", "output_dir"):
                 command += " --{} {}".format(
                     a.name.replace("_", "-"), self.__dict__[a.name]
                 )
@@ -104,7 +112,10 @@ class RunParallel:
             tstamp = split[2]
             tstamps.append(tstamp)
         split[2] = "_".join(tstamps)
-        fname = "-".join(split).replace("gwf", "npy")
+        fname = "-".join(split) + ".npy"
+
+        if self.output_dir is not None:
+            fname = os.path.join(self.output_dir, fname)
         vm.get(f"{_PACKAGE}/client/outputs.npy", fname)
 
     def __call__(self, vms, files, ips):
@@ -130,10 +141,9 @@ _res = [
 
 
 class ServerMonitor(mp.Process):
-    def __init__(self, ips, filename, models):
+    def __init__(self, ips, filename):
         self.ips = ips
         self.filename = filename
-        self.models = models
 
         self.header = (
             "ip,step,gpu_id,model,process,time (us),interval,count,utilization"
@@ -175,7 +185,7 @@ class ServerMonitor(mp.Process):
                 except AttributeError:
                     continue
 
-                if model in self.models:
+                if model in _MODELS:
                     value = int(float(value))
                     try:
                         count = value - self._counts[(ip, gpu_id, model)]
@@ -216,7 +226,7 @@ class ServerMonitor(mp.Process):
                 # GPU/model combination, either because this is
                 # the first loop or because we didn't record any
                 # new inferences during this interval
-                if model in self.models and index not in self._times:
+                if model in _MODELS and index not in self._times:
                     # we don't have a duration for this process
                     # on this node/GPU/model combo, so create one
                     self._times[index] = value
@@ -279,3 +289,58 @@ class ServerMonitor(mp.Process):
             self.close()
         except ValueError:
             self.terminate()
+
+
+def _convert_instances(value):
+    if not isinstance(value, dict):
+        values = {}
+        for model in _MODELS[2:]:
+            values[model] = value
+        value = values
+    for model in _MODELS[2:]:
+        if model not in value:
+            raise ValueError(
+                f"Missing number of instances for model {model}"
+            )
+    return value
+
+
+@attr.s(auto_attribs=True)
+class RunConfig:
+    num_nodes: int
+    gpus_per_node: int
+    clients_per_node: int
+    instances_per_gpu: MaybeDict(int) = attr.ib(converter=_convert_instances)
+    vcpus_per_gpu: int
+    kernel_stride: float
+    generation_rate: float
+
+    def __attrs_post_init__(self):
+        streams_per_gpu = (self.clients_per_node - 1) // self.gpus_per_node + 1
+        self.instances_per_gpu["snapshotter"] = streams_per_gpu
+
+    @property
+    def id(self):
+        strings = []
+        for a in self.__attrs_attrs__:
+            value = self.__dict__[a.name]
+            name = a.name.replace("_", "-")
+
+            string = name + "="
+            if isinstance(value, dict):
+                keys = sorted(value.keys())
+                for key in keys:
+                    val = value[key]
+                    key = key.replace("_", "-")
+                    string += f"{key}={val}&"
+                string = string[:-1]
+            else:
+                if a.type is float:
+                    value = float(value)
+                string += str(value)
+            strings.append(string)
+        return hex(adler32("_".join(strings).encode())).split("x")[1]
+
+    @property
+    def total_clients(self):
+        return self.clients_per_node * self.num_nodes

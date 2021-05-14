@@ -1,4 +1,5 @@
 import os
+import pickle
 import re
 import time
 import typing
@@ -15,34 +16,29 @@ import utils
 def update_model_configs(
     client: StorageClient,
     model_repo_bucket_name: str,
-    streams_per_gpu: int,
-    instances_per_gpu: typeo.MaybeDict(int)
+    run_config: utils.RunConfig
 ):
     model_repo_bucket = client.get_bucket(model_repo_bucket_name)
     for blob in model_repo_bucket.list_blobs():
+        # only updating config protobufs
         if not blob.name.endswith("config.pbtxt"):
             continue
 
         model_name = blob.name.split("/")[0]
         if model_name == "gwe2e":
+            # ensemble model doesn't use instance groups
             continue
-        elif model_name == "snapshotter":
-            count = streams_per_gpu
-        else:
-            try:
-                count = instances_per_gpu[model_name]
-            except TypeError:
-                count = instances_per_gpu
-            except KeyError:
-                raise ValueError(
-                    f"Must specify number ofinstances for model {model_name}"
-                )
+        count = run_config.instances_per_gpu[model_name]
 
+        # replace the instance group count
+        # in the config protobuf
         config_str = blob.download_as_bytes().decode()
         config_str = re.sub(
             "\n  count: [0-9]+\n", f"\n  count: {count}\n", config_str
         )
 
+        # delete the existing blob and
+        # replace it with the updated config
         blob_name = blob.name
         blob.delete()
         blob = model_repo_bucket.blob(blob_name)
@@ -55,50 +51,59 @@ def configure_wait_and_run(
     cluster: cloud.gke.Cluster,
     client_manager: gcp.ClientVMManager,
     runner: utils.RunParallel,
-    num_nodes: int,
-    clients_per_node: int,
+    run_config: utils.RunConfig,
     blob_names: typing.List[str]
 ):
     utils.configure_vms_parallel(client_manager.instances)
 
     # now wait for all the deployments to come online
     # and grab the associated IPs of their load balancers
-    server_ips = []
-    for i in range(num_nodes):
+    unique_ips = []
+    for i in range(run_config.num_nodes):
         cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
         ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
-        for j in range(clients_per_node):
-            server_ips.append(ip)
+        unique_ips.append(ip)
 
-    models = [
-        "gwe2e", "snapshotter", "deepclean_h", "deepclean_l", "postproc", "bbh"
+    # assign blobs to clients in a manner such that the
+    # number of blobs per client is as even as possible,
+    # and that all clients are given sequential blobs
+    # e.g. blobs [a b c d e f g] for 3 clients would produce
+    # client_blobs = [[a, b, c], [d, e], [f, g]]
+    blobs_per_client, remainder_blobs = divmod(
+        len(blob_names), run_config.total_clients
+    )
+    client_blobs, idx = [], 0
+    for i in range(run_config.total_clients):
+        if i < remainder_blobs:
+            num_blobs = blobs_per_client + 1
+        else:
+            num_blobs = blobs_per_client
+
+        client_blobs.append(blob_names[idx: idx + num_blobs])
+        idx += num_blobs
+
+    # establish some parameters for our server monitor
+    with open(os.path.join(runner.output_dir, "config.pkl"), "wb") as f:
+        pickle.dump(run_config, f)
+    fname = os.path.join(runner.output_dir, "server-stats.csv")
+
+    # assign ips to clients in a similar manner as above, only don't
+    # worry about sequential ordering because it doesn't matter which
+    # server a client makes requests to. Also don't care about the
+    # length going a little long since we zip in `runner` anyway
+    client_ips = [
+        ip for j in range(run_config.clients_per_node) for ip in unique_ips
     ]
 
-    blobs_per_client = (len(blob_names) - 1) // clients_per_node + 1
-    client_blobs = []
-    for i in range(clients_per_node):
-        blobs_i = []
-        for j in range(blobs_per_client):
-            idx = i * blobs_per_client + j
-            try:
-                blobs_i.append(blob_names[idx])
-            except IndexError:
-                break
-        client_blobs.append(blobs_i)
-
+    # run the clients while monitoring the server,
+    # keep track of how much time it takes us
     start_time = time.time()
-    with utils.ServerMonitor(
-        list(set(server_ips)),
-        (
-            f"num-nodes={num_nodes}_"
-            f"clients-per-node={clients_per_node}_"
-            "server-stats.csv"
-        ),
-        models
-    ) as monitor:
-        runner(client_manager.instances, client_blobs, server_ips)
+    with utils.ServerMonitor(unique_ips, fname) as monitor:
+        runner(client_manager.instances, client_blobs, client_ips)
         end_time = time.time()
 
+    # check to make sure the monitor didn't encounter
+    # any errors and return the time delta for the run
     monitor.check()
     return end_time - start_time
 
@@ -120,6 +125,21 @@ def main(
     kernel_stride: float,
     generation_rate: float
 ):
+    run_config = utils.RunConfig(
+        num_nodes=num_nodes,
+        gpus_per_node=gpus_per_node,
+        clients_per_node=clients_per_node,
+        instances_per_gpu=instances_per_gpu,
+        vcpus_per_gpu=vcpus_per_gpu,
+        kernel_stride=kernel_stride,
+        generation_rate=generation_rate
+    )
+    output_dir = os.path.join("outputs", "run-" + run_config.id)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # instantiate our cluster manager up front to establish
+    # some credentials that we'll use for other objects
     cluster_manager = cloud.GKEClusterManager(
         project=project, zone=zone, credentials=service_account_key_file
     )
@@ -139,14 +159,15 @@ def main(
     # set up the Triton snapshotter config so that the
     # appropriate number of snapshot instances are available
     # on each node
-    streams_per_gpu = (clients_per_node - 1) // gpus_per_node + 1
     update_model_configs(
         storage_client,
         model_repo_bucket_name,
-        streams_per_gpu,
-        instances_per_gpu
+        run_config
     )
 
+    # set up a VM manager with a connection we can
+    # use to execute commands over SSH and copy output
+    # from the run via SCP
     client_connection = gcp.VMConnection(username, ssh_key_file)
     client_manager = gcp.ClientVMManager(
         project=project,
@@ -156,6 +177,9 @@ def main(
         connection=client_connection
     )
 
+    # describe our cluster as a resource, then use the
+    # manager to manage it in a context that will
+    # delete the resource once we're done with it
     cluster_resource = container.Cluster(
         name=cluster_name,
         node_pools=[container.NodePool(
@@ -165,8 +189,12 @@ def main(
         )]
     )
     with cluster_manager.manage_resource(cluster_resource) as cluster:
+        # deploy the nvidia driver daemonset to the cluster
+        # so that our GPU node pool will be ready to go
         cluster.deploy_gpu_drivers()
 
+        # describe a node pool resource then manage it with our
+        # cluster object in the same manner
         vcpus_per_node = vcpus_per_gpu * gpus_per_node
         node_pool_config = cloud.create_gpu_node_pool_config(
             vcpus=vcpus_per_node,
@@ -179,6 +207,7 @@ def main(
             config=node_pool_config
         )
         with cluster.manage_resource(node_pool_resource):
+            # values to fill in wild cards on tritonserver deploy yaml
             values = {
                 "gpus": gpus_per_node,
                 "tag": "20.11",
@@ -200,25 +229,36 @@ def main(
                     if idx < num_blobs:
                         client_manager.create_instance(idx, 8)
 
+            # another cheap context to make sure our
+            # VMs delete once we're done with our run
             with client_manager as client_manager:
+                # baseline config that will be
+                # shared between all the VM jobs
                 runner = utils.RunParallel(
                     model_name="gwe2e",
                     model_version=1,
-                    generation_rate=1000,
+                    generation_rate=generation_rate,
                     sequence_id=1001,
                     bucket_name=data_bucket_name,
                     kernel_stride=kernel_stride,
                     sample_rate=4000,
-                    chunk_size=256
+                    chunk_size=256,
+                    output_dir=output_dir
                 )
+
+                # run the clients on the VM and get the
+                # time delta on our side
                 delta = configure_wait_and_run(
                     cluster,
                     client_manager,
                     runner,
-                    num_nodes,
-                    clients_per_node,
+                    run_config,
                     blob_names
                 )
+
+                # report some of the metrics then exit all
+                # our contexts to destroy the resources we
+                # spun up
                 throughput = 4096 * num_blobs / (kernel_stride * delta)
                 print(
                     "Predicted on {} s worth of data in "
