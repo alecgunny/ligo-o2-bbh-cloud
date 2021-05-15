@@ -28,7 +28,12 @@ def update_model_configs(
         if model_name == "gwe2e":
             # ensemble model doesn't use instance groups
             continue
-        count = run_config.instances_per_gpu[model_name]
+        elif model_name == "snapshotter":
+            count = (
+                run_config.clients_per_node - 1
+            ) // run_config.gpus_per_node + 1
+        else:
+            count = run_config.instance_config.__dict__[model_name]
 
         # replace the instance group count
         # in the config protobuf
@@ -125,16 +130,22 @@ def main(
     kernel_stride: float,
     generation_rate: float
 ):
+    if not isinstance(instances_per_gpu, dict):
+        instances_per_gpu = (instances_per_gpu,) * 4
+        instance_config = utils.InstanceConfig(*instances_per_gpu)
+    else:
+        instance_config = utils.InstanceConfig(**instances_per_gpu)
+
     run_config = utils.RunConfig(
         num_nodes=num_nodes,
         gpus_per_node=gpus_per_node,
         clients_per_node=clients_per_node,
-        instances_per_gpu=instances_per_gpu,
+        instance_config=instance_config,
         vcpus_per_gpu=vcpus_per_gpu,
         kernel_stride=kernel_stride,
         generation_rate=generation_rate
     )
-    output_dir = os.path.join("outputs", "run-" + run_config.id)
+    output_dir = os.path.join("analysis", "data", run_config.id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 

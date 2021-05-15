@@ -6,6 +6,7 @@ import re
 import time
 import typing
 from zlib import adler32
+from functools import lru_cache
 
 import attr
 import requests
@@ -291,56 +292,57 @@ class ServerMonitor(mp.Process):
             self.terminate()
 
 
-def _convert_instances(value):
-    if not isinstance(value, dict):
-        values = {}
-        for model in _MODELS[2:]:
-            values[model] = value
-        value = values
-    for model in _MODELS[2:]:
-        if model not in value:
-            raise ValueError(
-                f"Missing number of instances for model {model}"
-            )
-    return value
+@attr.s(auto_attribs=True, frozen=True)
+class InstanceConfig:
+    deepclean_h: int
+    deepclean_l: int
+    postproc: int
+    bbh: int
+
+    def __str__(self):
+        string = "{"
+        for a in self.__attrs_attrs__:
+            value = self.__dict__[a.name]
+            string += f"\n\t{a.name}: {value},"
+        string = string[:-1]
+        return string + "\n}"
 
 
-@attr.s(auto_attribs=True)
+@attr.s(auto_attribs=True, frozen=True)
 class RunConfig:
     num_nodes: int
     gpus_per_node: int
     clients_per_node: int
-    instances_per_gpu: MaybeDict(int) = attr.ib(converter=_convert_instances)
+    instance_config: InstanceConfig
     vcpus_per_gpu: int
     kernel_stride: float
     generation_rate: float
 
-    def __attrs_post_init__(self):
-        streams_per_gpu = (self.clients_per_node - 1) // self.gpus_per_node + 1
-        self.instances_per_gpu["snapshotter"] = streams_per_gpu
-
-    @property
-    def id(self):
-        strings = []
+    @lru_cache(None)
+    def _make_string(self):
+        string = "{"
         for a in self.__attrs_attrs__:
             value = self.__dict__[a.name]
-            name = a.name.replace("_", "-")
+            if a.type is float:
+                value = float(value)
+            value = str(value)
 
-            string = name + "="
-            if isinstance(value, dict):
-                keys = sorted(value.keys())
-                for key in keys:
-                    val = value[key]
-                    key = key.replace("_", "-")
-                    string += f"{key}={val}&"
-                string = string[:-1]
-            else:
-                if a.type is float:
-                    value = float(value)
-                string += str(value)
-            strings.append(string)
-        return hex(adler32("_".join(strings).encode())).split("x")[1]
+            if "\n" in value:
+                lines = value.split("\n")
+                lines = lines[:1] + ["\t" + line for line in lines[1:]]
+                value = "\n".join(lines)
+            string += f"\n\t{a.name}: {value},"
+        string = string[:-1]
+        return string + "\n}"
 
     @property
     def total_clients(self):
         return self.clients_per_node * self.num_nodes
+
+    def __str__(self):
+        return f"RunConfig {self.id} " + self._make_string()
+
+    @property
+    def id(self):
+        string = self._make_string()
+        return hex(adler32(string.encode())).split("x")[1]

@@ -1,0 +1,16 @@
+name: o2
+dependencies:
+  - python=3.8
+  - ipython
+  - bokeh
+  - jupyter
+  - matplotlib
+  - seaborn
+  - requests
+  - scp
+  - paramiko
+  - pip
+  - pip:
+      - google-cloud-compute
+      - git+https://github.com/alecgunny/cloud-utils@main
+      - git+https://github.com/alecgunny/typeo@main

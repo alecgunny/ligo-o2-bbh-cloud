@@ -2,4 +2,4 @@
 *.npy
 *.csv
 .ipynb_checkpoints/
-run-*/
+analysis/data

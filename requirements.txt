@@ -1,6 +1,0 @@
-requests
-scp
-paramiko
-google-cloud-compute
-git+https://github.com/alecgunny/cloud-utils@main
-git+https://github.com/alecgunny/typeo@main
