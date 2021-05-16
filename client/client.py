@@ -1,7 +1,6 @@
 import logging
 import re
 import time
-import typing
 
 import numpy as np
 import typeo
@@ -18,10 +17,11 @@ def main(
     generation_rate: float,
     sequence_id: int,
     bucket_name: str,
+    t0: float,
+    length: float,
     kernel_stride: float,
     sample_rate: float = 4000,
     chunk_size: float = 1024,
-    fnames: typing.Optional[typing.List[str]] = None
 ):
     client = ThreadedMultiStreamInferenceClient(
         url=url,
@@ -46,11 +46,12 @@ def main(
 
         sources[name] = GCPFrameDataGenerator(
             bucket_name=bucket_name,
+            t0=t0,
+            length=length,
             sample_rate=sample_rate,
             channels=channels[name],
             kernel_stride=kernel_stride,
             chunk_size=chunk_size,
-            fnames=fnames,
             generation_rate=generation_rate,
             name=state_name
         )

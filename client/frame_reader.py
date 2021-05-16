@@ -74,6 +74,12 @@ def _eager_put(q, x, event):
     return True
 
 
+def _parse_blob_fname(name):
+    name = name.replace(".gwf", "")
+    timestamp, length = tuple(map(int, name.split("-")[-2:]))
+    return timestamp, length
+
+
 @_catch_wrap_and_put
 def _download_and_write_frames(q, blobs, stop_event, name):
     for blob in blobs:
@@ -87,7 +93,7 @@ def _download_and_write_frames(q, blobs, stop_event, name):
 
         # TODO: how to we make this general?
         fname = blob.name.split("/")[-1]
-        timestamp = fname.split("-")[2]
+        timestamp, length = _parse_blob_fname(fname)
 
         # check again here because things could have
         # changed in the time it took us to download
@@ -95,7 +101,7 @@ def _download_and_write_frames(q, blobs, stop_event, name):
         if stop_event.is_set():
             break
 
-        fname = timestamp + "-" + name.replace("/", "-") + ".gwf"
+        fname = "-".join(name.replace("/", "-"), timestamp, length) + ".gwf"
         with open(fname, "wb") as f:
             f.write(blob_bytes)
         q.put(fname)
@@ -106,6 +112,8 @@ def read_frames(
     q,
     stop_event,
     bucket_name,
+    t0,
+    length,
     sample_rate,
     channels,
     chunk_size,
@@ -125,9 +133,13 @@ def read_frames(
         )
 
     # filter out the relevant blobs up front
-    blobs = bucket.list_blobs()
-    if fnames is not None:
-        blobs = [i for i in blobs if i.name in fnames]
+    def _blob_filter(blob):
+        fname = blob.name.replace(".gwf", "").split("/")[-1]
+        split = fname.split("-")
+        tstamp, frame_length = tuple(map(int, split[-2:]))
+        return (tstamp + frame_length) >= t0 and tstamp < (t0 + length)
+
+    blobs = list(filter(_blob_filter, bucket.list_blobs()))
 
     # run the download/write in a separate process
     loader_q = mp.Queue(maxsize=2)
@@ -142,19 +154,20 @@ def read_frames(
     try:
         while not stop_event.is_set():
             fname = _eager_get(loader_q, loader)
-            timestamp = int(fname.split("-")[0])
-            start = timestamp + 0
-            while start < timestamp + 4096:
+            timestamp, frame_length = _parse_blob_fname(fname)
+
+            start = max(timestamp, t0)
+            end = min(timestamp + frame_length, t0 + length)
+            while start < end:
                 if stop_event.is_set():
                     break
 
-                end = min(start + chunk_size, timestamp + 4096)
                 timeseries = TimeSeriesDict.read(
                     fname,
                     channels=list(set(channels)),
                     format="gwf",
                     start=start,
-                    end=end
+                    end=min(start + chunk_size, end)
                 )
 
                 timeseries.resample(sample_rate)
@@ -180,12 +193,13 @@ def read_frames(
 @attr.s(auto_attribs=True)
 class GCPFrameDataGenerator:
     bucket_name: str
+    t0: float
+    length: float
     sample_rate: float
     channels: typing.List[str]
     kernel_stride: float
     chunk_size: float
     generation_rate: typing.Optional[float] = None
-    fnames: typing.Optional[typing.List[str]] = None
     name: typing.Optional[str] = None
 
     def __attrs_post_init__(self):
@@ -204,11 +218,12 @@ class GCPFrameDataGenerator:
                 self._q,
                 self._stop_event,
                 self.bucket_name,
+                self.t0,
+                self.length,
                 self.sample_rate,
                 self.channels,
                 self.chunk_size,
-                self.name,
-                self.fnames
+                self.name
             )
         )
         self._frame_reader.start()
