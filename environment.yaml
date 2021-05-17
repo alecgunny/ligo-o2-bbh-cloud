@@ -4,12 +4,12 @@ dependencies:
   - bokeh
   - ipython
   - jupyter
-  - jupyter-book
   - paramiko
   - pip
   - requests
   - scp
   - pip:
       - google-cloud-compute
+      - jupyter-book
       - git+https://github.com/alecgunny/cloud-utils@main
       - git+https://github.com/alecgunny/typeo@main
