@@ -101,7 +101,7 @@ def _download_and_write_frames(q, blobs, stop_event, name):
         if stop_event.is_set():
             break
 
-        fname = "-".join([name, timestamp, length]) + ".gwf"
+        fname = "-".join(map(str, [name, timestamp, length])) + ".gwf"
         with open(fname, "wb") as f:
             f.write(blob_bytes)
         q.put(fname)
