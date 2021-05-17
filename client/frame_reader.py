@@ -82,6 +82,7 @@ def _parse_blob_fname(name):
 
 @_catch_wrap_and_put
 def _download_and_write_frames(q, blobs, stop_event, name):
+    name = name.replace("/", "-")
     for blob in blobs:
         if not blob.name.endswith(".gwf"):
             continue
@@ -100,7 +101,7 @@ def _download_and_write_frames(q, blobs, stop_event, name):
         if stop_event.is_set():
             break
 
-        fname = "-".join(name.replace("/", "-"), timestamp, length) + ".gwf"
+        fname = "-".join([name, timestamp, length]) + ".gwf"
         with open(fname, "wb") as f:
             f.write(blob_bytes)
         q.put(fname)
