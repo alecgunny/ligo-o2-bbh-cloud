@@ -1,15 +1,14 @@
 name: o2
 dependencies:
   - python=3.8
-  - ipython
   - bokeh
+  - ipython
   - jupyter
-  - matplotlib
-  - seaborn
-  - requests
-  - scp
+  - jupyter-book
   - paramiko
   - pip
+  - requests
+  - scp
   - pip:
       - google-cloud-compute
       - git+https://github.com/alecgunny/cloud-utils@main
