@@ -11,7 +11,6 @@ from functools import lru_cache
 import attr
 import requests
 from cloud_utils.utils import wait_for
-from typeo import MaybeDict
 
 
 _PACKAGE = "ligo-o2-bbh-cloud"
@@ -20,6 +19,16 @@ _RUN = f"./{_PACKAGE}/client/run.sh"
 _MODELS = [
     "gwe2e", "snapshotter", "deepclean_l", "deepclean_h", "postproc", "bbh"
 ]
+
+
+def parse_blob_fname(name):
+    # TODO: copied and pasted from client/frame_reader.py
+    # How can we make this more general AND make it available
+    # to both the client and this host code without making
+    # a full subrepo for it?
+    name = name.replace(".gwf", "")
+    timestamp, length = tuple(map(int, name.split("-")[-2:]))
+    return timestamp, length
 
 
 def _run_in_pool(fn, args, msg, exit_msg):
@@ -73,6 +82,7 @@ class RunParallel:
     sequence_id: int
     bucket_name: str
     kernel_stride: float
+    length: float
     sample_rate: float = 4000
     chunk_size: float = 1024
     output_dir: typing.Optional[str] = None
@@ -86,42 +96,27 @@ class RunParallel:
                     a.name.replace("_", "-"), self.__dict__[a.name]
                 )
         return command + (
-            " --url {ip}:8001 --sequence-id {sequence_id} --fnames {files}"
+            " --url {ip}:8001 --sequence-id {sequence_id} --t0 {t0}"
         )
 
-    def run_on_vm(self, vm, files, ip, sequence_id):
-        command = self.command.format(
-            ip=ip,
-            sequence_id=sequence_id,
-            files=" ".join(files)
-        )
+    def run_on_vm(self, vm, t0, ip, sequence_id):
+        command = self.command.format(ip=ip, sequence_id=sequence_id, t0=t0)
         out, err = vm.run(command)
 
         # parse out framecpp stderr info
-        lines = []
-        for line in err.split("\n"):
-            if line and not line.startswith("Loading: Fr"):
-                lines.append(line)
-
-        err = "\n".join(lines)
+        err_re = re.compile("^Loading: Fr.+$", re.MULTILINE)
+        err = err_re.sub("", err).strip()
         if err:
             raise RuntimeError(err)
 
-        tstamps = []
-        for f in files:
-            split = f.split("/")[-1].replace(".gwf", "").split("-")
-            tstamp = split[2]
-            tstamps.append(tstamp)
-        split[2] = "_".join(tstamps)
-        fname = "-".join(split) + ".npy"
-
+        fname = f"{t0}-{self.length}.npy"
         if self.output_dir is not None:
             fname = os.path.join(self.output_dir, fname)
         vm.get(f"{_PACKAGE}/client/outputs.npy", fname)
 
-    def __call__(self, vms, files, ips):
+    def __call__(self, vms, t0s, ips):
         seq_ids = [self.sequence_id + i for i in range(len(vms))]
-        args = zip(vms, files, ips, seq_ids)
+        args = zip(vms, t0s, ips, seq_ids)
 
         _run_in_pool(
             self.run_on_vm,

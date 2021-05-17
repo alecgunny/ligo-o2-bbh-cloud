@@ -91,7 +91,6 @@ def _download_and_write_frames(q, blobs, stop_event, name):
             break
         blob_bytes = blob.download_as_bytes()
 
-        # TODO: how to we make this general?
         fname = blob.name.split("/")[-1]
         timestamp, length = _parse_blob_fname(fname)
 
