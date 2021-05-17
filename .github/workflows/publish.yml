@@ -15,6 +15,11 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v2
 
+    - name: Download
+      run: |
+        cd analysis
+        ./download-data.sh ${{ secrets.DATA_FILE_ID }}
+
     - name: Setup miniconda
       uses: conda-incubator/setup-miniconda@v2
       with:
@@ -24,6 +29,7 @@ jobs:
     - name: Build book
       shell: bash -l {0}
       run: |
+        cd analysis
         jupyter-book build .
 
     # Push the book's HTML to github-pages
