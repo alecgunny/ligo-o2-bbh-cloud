@@ -266,7 +266,7 @@ if __name__ == "__main__":
     flags = parser.parse_args()
 
     logging.basicConfig(
-        format="%(asctime)s - %(levelname)-8s %(message)s",
+        format="%(asctime)s.%(msecs)03d - %(levelname)-8s %(message)s",
         stream=sys.stdout,
         datefmt="%H:%M:%S",
         level=logging.INFO

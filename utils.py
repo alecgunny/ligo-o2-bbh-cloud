@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 import multiprocessing as mp
 import os
 import queue
@@ -19,6 +20,7 @@ _RUN = f"./{_PACKAGE}/client/run.sh"
 _MODELS = [
     "gwe2e", "snapshotter", "deepclean_l", "deepclean_h", "postproc", "bbh"
 ]
+logging.getLogger("paramiko").setLevel(logging.WARNING)
 
 
 def parse_blob_fname(name):

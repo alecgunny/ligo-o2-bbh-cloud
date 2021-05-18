@@ -176,9 +176,10 @@ def read_frames(
                 try:
                     frame = np.stack(arrays).astype("float32")
                 except ValueError:
+                    shapes = [x.shape for x in arrays]
                     raise ValueError(
                         "Tried to stack arrays with shapes {} "
-                        "from interval {}-{}".format(arrays, start, _end)
+                        "from interval {}-{}".format(shapes, start, _end)
                     )
 
                 if not _eager_put(q, frame, stop_event):
