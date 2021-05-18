@@ -162,18 +162,28 @@ def read_frames(
                 if stop_event.is_set():
                     break
 
+                _end = min(start + chunk_size, end)
                 timeseries = TimeSeriesDict.read(
                     fname,
                     channels=list(set(channels)),
                     format="gwf",
                     start=start,
-                    end=min(start + chunk_size, end)
+                    end=_end
                 )
 
                 timeseries.resample(sample_rate)
-                frame = np.stack(
-                    [timeseries[channel].value for channel in channels]
-                ).astype("float32")
+                arrays = [timeseries[channel].value for channel in channels]
+                try:
+                    frame = np.stack(arrays).astype("float32")
+                except ValueError:
+                    raise ValueError(
+                        "Tried to stack arrays with shapes {} "
+                        "from interval {}-{}".format(
+                            ", ".join([x.shape for x in arrays]),
+                            start,
+                            _end
+                        )
+                    )
 
                 if not _eager_put(q, frame, stop_event):
                     break
