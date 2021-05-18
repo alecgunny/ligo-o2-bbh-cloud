@@ -1,6 +1,8 @@
+import logging
 import os
 import pickle
 import re
+import sys
 import time
 
 import cloud_utils as cloud
@@ -196,7 +198,10 @@ def main(
             initial_node_count=num_nodes,
             config=node_pool_config
         )
-        with cluster.manage_resource(node_pool_resource):
+
+        # we don't need to delete the node pool since we'll
+        # be deleting the cluster at context exit
+        with cluster.manage_resource(node_pool_resource, keep=True):
             # values to fill in wild cards on tritonserver deploy yaml
             values = {
                 "gpus": gpus_per_node,
@@ -259,4 +264,11 @@ def main(
 if __name__ == "__main__":
     parser = typeo.make_parser(main)
     flags = parser.parse_args()
+
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)-8s %(message)s",
+        stream=sys.stdout,
+        datefmt="%H:%M:%S",
+        level=logging.INFO
+    )
     main(**vars(flags))

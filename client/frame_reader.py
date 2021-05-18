@@ -178,11 +178,7 @@ def read_frames(
                 except ValueError:
                     raise ValueError(
                         "Tried to stack arrays with shapes {} "
-                        "from interval {}-{}".format(
-                            ", ".join([x.shape for x in arrays]),
-                            start,
-                            _end
-                        )
+                        "from interval {}-{}".format(arrays, start, _end)
                     )
 
                 if not _eager_put(q, frame, stop_event):
