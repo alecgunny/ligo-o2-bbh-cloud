@@ -81,7 +81,9 @@ def _parse_blob_fname(name):
 
 
 @_catch_wrap_and_put
-def _download_and_write_frames(q, blobs, stop_event, name):
+def _download_and_write_frames(
+    q, blobs, stop_event, name, channels, sample_rate
+):
     name = name.replace("/", "-")
     for blob in blobs:
         if not blob.name.endswith(".gwf"):
@@ -104,6 +106,18 @@ def _download_and_write_frames(q, blobs, stop_event, name):
         fname = "-".join(map(str, [name, timestamp, length])) + ".gwf"
         with open(fname, "wb") as f:
             f.write(blob_bytes)
+
+        # load in the data and resample it so that
+        # we can stride through it evenly, then
+        # write it back out
+        timeseries = TimeSeriesDict.read(
+            fname,
+            channels=list(set(channels)),
+            format="gwf"
+        )
+        timeseries.resample(sample_rate)
+        timeseries.write(fname)
+
         q.put(fname)
 
 
@@ -146,7 +160,7 @@ def read_frames(
     loader_event = mp.Event()
     loader = mp.Process(
         target=_download_and_write_frames,
-        args=(loader_q, blobs, loader_event, name)
+        args=(loader_q, blobs, loader_event, name, channels, sample_rate)
     )
     loader.start()
     time.sleep(0.1)
@@ -170,8 +184,6 @@ def read_frames(
                     start=start,
                     end=_end
                 )
-
-                timeseries.resample(sample_rate)
                 arrays = [timeseries[channel].value for channel in channels]
                 try:
                     frame = np.stack(arrays).astype("float32")

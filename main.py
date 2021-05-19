@@ -180,6 +180,12 @@ def main(
             config=container.NodeConfig()
         )]
     )
+
+    logging.info(
+        "Beginning inference on {} s of data using run config {}".format(
+            total_time, str(run_config)
+        )
+    )
     with cluster_manager.manage_resource(cluster_resource) as cluster:
         # deploy the nvidia driver daemonset to the cluster
         # so that our GPU node pool will be ready to go
@@ -254,10 +260,9 @@ def main(
                 # report some of the metrics then exit all our
                 # contexts to destroy the resources we spun up
                 throughput = total_time / (kernel_stride * delta)
-                print(
-                    "Predicted on {} s worth of data in "
-                    "{:0.1f} s, throughput {:0.2f}".format(
-                        total_time, delta, throughput)
+                logging.info(
+                    f"Predicted on {total_time} s worth of data in "
+                    f"{delta:0.1f} s, throughput {throughput:0.2f}"
                 )
 
 
