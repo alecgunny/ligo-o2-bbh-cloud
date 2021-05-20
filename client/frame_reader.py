@@ -75,17 +75,14 @@ def _eager_put(q, x, event):
 
 
 def _parse_blob_fname(name):
-    name = name.replace(".gwf", "")
+    name = name.split(".")[0]
     timestamp, length = tuple(map(int, name.split("-")[-2:]))
     return timestamp, length
 
 
 @_catch_wrap_and_put
-def _download_and_write_frames(
-    q, blobs, stop_event, name, channels, sample_rate
-):
+def _download_and_write_frames(q, blobs, stop_event, name):
     name = name.replace("/", "-")
-    channels = list(set(channels))
     for blob in blobs:
         if not blob.name.endswith(".gwf"):
             continue
@@ -93,29 +90,11 @@ def _download_and_write_frames(
         # check first if we even need to do this
         if stop_event.is_set():
             break
-        blob_bytes = blob.download_as_bytes()
 
         fname = blob.name.split("/")[-1]
         timestamp, length = _parse_blob_fname(fname)
-
-        # check again here because things could have
-        # changed in the time it took us to download
-        # and this could be as time consuming
-        if stop_event.is_set():
-            break
-
         fname = "-".join(map(str, [name, timestamp, length])) + ".gwf"
-        with open(fname, "wb") as f:
-            f.write(blob_bytes)
-
-        # load in the data and resample it so that
-        # we can stride through it evenly, then
-        # write it back out
-        timeseries = TimeSeriesDict.read(fname, channels=channels, format="gwf")
-        timeseries.resample(sample_rate)
-        os.remove(fname)
-        timeseries.write(fname, format="gwf")
-
+        blob.download_to_filename(fname)
         q.put(fname)
 
 
@@ -158,43 +137,41 @@ def read_frames(
     loader_event = mp.Event()
     loader = mp.Process(
         target=_download_and_write_frames,
-        args=(loader_q, blobs, loader_event, name, channels, sample_rate)
+        args=(loader_q, blobs, loader_event, name)
     )
     loader.start()
     time.sleep(0.1)
 
+    chunk_size = chunk_size * sample_rate
     try:
         while not stop_event.is_set():
             fname = _eager_get(loader_q, loader)
             timestamp, frame_length = _parse_blob_fname(fname)
 
-            start = max(timestamp, t0)
-            end = min(timestamp + frame_length, t0 + length)
-            while start < end:
-                if stop_event.is_set():
-                    break
+            # load in the data and resample it so that
+            # we can stride through it evenly, then
+            # write it back out
+            timeseries = TimeSeriesDict.read(
+                fname,
+                channels=list(set(channels)),
+                format="gwf"
+            )
+            timeseries.resample(sample_rate)
+            arrays = [timeseries[channel].value for channel in channels]
+            frame = np.stack(arrays).astype("float32")
 
-                _end = min(start + chunk_size, end)
-                timeseries = TimeSeriesDict.read(
-                    fname,
-                    channels=list(set(channels)),
-                    format="gwf",
-                    start=start,
-                    end=_end
-                )
-                arrays = [timeseries[channel].value for channel in channels]
-                try:
-                    frame = np.stack(arrays).astype("float32")
-                except ValueError:
-                    shapes = [x.shape for x in arrays]
-                    raise ValueError(
-                        "Tried to stack arrays with shapes {} "
-                        "from interval {}-{}".format(shapes, start, _end)
-                    )
+            # if t0 is greater than the timestamp, we need
+            # to start somewhere in the file
+            offset = timestamp - t0
+            start = -min(offset, 0)
+            stop = min(frame_length, length - offset)
 
-                if not _eager_put(q, frame, stop_event):
+            start = int(start * sample_rate)
+            stop = int(stop * sample_rate)
+            for idx in range(start, stop, chunk_size):
+                chunk = frame[:, idx: idx + chunk_size]
+                if not _eager_put(q, chunk, stop_event):
                     break
-                start += chunk_size
             os.remove(fname)
     finally:
         loader_event.set()
