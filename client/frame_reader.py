@@ -116,7 +116,7 @@ def _download_and_write_frames(
             format="gwf"
         )
         timeseries.resample(sample_rate)
-        timeseries.write(fname)
+        timeseries.write(fname, format="gwf")
 
         q.put(fname)
 
