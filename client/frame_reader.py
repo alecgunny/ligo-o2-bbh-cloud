@@ -85,6 +85,7 @@ def _download_and_write_frames(
     q, blobs, stop_event, name, channels, sample_rate
 ):
     name = name.replace("/", "-")
+    channels = list(set(channels))
     for blob in blobs:
         if not blob.name.endswith(".gwf"):
             continue
@@ -110,12 +111,9 @@ def _download_and_write_frames(
         # load in the data and resample it so that
         # we can stride through it evenly, then
         # write it back out
-        timeseries = TimeSeriesDict.read(
-            fname,
-            channels=list(set(channels)),
-            format="gwf"
-        )
+        timeseries = TimeSeriesDict.read(fname, channels=channels, format="gwf")
         timeseries.resample(sample_rate)
+        os.remove(fname)
         timeseries.write(fname, format="gwf")
 
         q.put(fname)
