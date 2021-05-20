@@ -142,7 +142,7 @@ def read_frames(
     loader.start()
     time.sleep(0.1)
 
-    chunk_size = chunk_size * sample_rate
+    chunk_size = int(chunk_size * sample_rate)
     try:
         while not stop_event.is_set():
             fname = _eager_get(loader_q, loader)
