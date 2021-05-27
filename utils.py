@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 import queue
 import re
+import threading
 import time
 import typing
 from zlib import adler32
@@ -20,7 +21,7 @@ _RUN = f"./{_PACKAGE}/client/run.sh"
 _MODELS = [
     "gwe2e", "snapshotter", "deepclean_l", "deepclean_h", "postproc", "bbh"
 ]
-logging.getLogger("paramiko").setLevel(logging.WARNING)
+logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
 
 def parse_blob_fname(name):
@@ -40,18 +41,26 @@ def _run_in_pool(fn, args, msg, exit_msg):
             if not isinstance(a, tuple):
                 a = (a,)
             futures.append(executor.submit(fn, *a))
+        time.sleep(3)
 
         results = []
+        start_time = time.time()
 
         def _callback():
-            for f in futures:
-                try:
-                    result = f.result(timeout=1e-3)
-                    results.append(result)
-                    futures.remove(f)
-                except concurrent.futures.TimeoutError:
-                    continue
-            return len(futures) == 0
+            done, _ = concurrent.futures.wait(futures, timeout=1e-3)
+            for f in done:
+                results.append(f.result())
+                futures.remove(f)
+
+            num_done = len(results)
+            num_pending = len([f for f in futures if not f.running()])
+            num_running = len([f for f in futures if f.running()])
+            elapsed = time.time() - start_time
+
+            status = " Pending={}, Running={}, Completed={} after {} s".format(
+                num_pending, num_running, num_done, int(elapsed)
+            )
+            return msg + status, len(futures) == 0
 
         wait_for(_callback, msg, exit_msg)
         return results
@@ -155,7 +164,7 @@ class ServerMonitor(mp.Process):
         self._error_q = mp.Queue()
         super().__init__()
 
-    def _get_data_for_ip(self, ip):
+    def _get_data_for_ip(self, ip, step):
         response = requests.get(f"http://{ip}:8002/metrics")
         response.raise_for_status()
 
@@ -237,7 +246,7 @@ class ServerMonitor(mp.Process):
 
             data += "\n" + ",".join([
                 ip,
-                str(self._steps[ip]),
+                str(step),
                 gpu_id,
                 model,
                 process,
@@ -265,16 +274,36 @@ class ServerMonitor(mp.Process):
     def run(self):
         f = open(self.filename, "w")
         f.write(self.header)
-        try:
-            while not self.stopped:
-                for ip in self.ips:
-                    data = self._get_data_for_ip(ip)
+
+        lock = threading.Lock()
+
+        def target(ip):
+            step = 0
+            try:
+                while not self.stopped:
+                    data = self._get_data_for_ip(ip, step)
                     if data:
-                        f.write(data)
-                        self._steps[ip] += 1
+                        with lock:
+                            f.write(data)
+                        step += 1
+            except Exception:
+                self.stop()
+                raise
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(target, ip) for ip in self.ips]
+
+        try:
+            while len(futures) > 0:
+                done, futures = concurrent.futures.wait(futures, timeout=1e-2)
+                for future in done:
+                    exc = future.exception()
+                    if exc is not None:
+                        raise exc
         except Exception as e:
-            f.close()
             self._error_q.put(str(e))
+        finally:
+            f.close()
 
     def __enter__(self):
         self.start()

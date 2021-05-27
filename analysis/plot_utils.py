@@ -6,6 +6,7 @@ from functools import wraps, lru_cache
 
 import numpy as np
 import pandas as pd
+from scipy.stats import gaussian_kde
 
 from bokeh.io import output_notebook, show
 from bokeh.models import ColumnDataSource
@@ -209,3 +210,63 @@ def plot_throughput_vs_time(df, models=None):
             legend_label=model
         )
     show(p)
+
+
+cost_per_n1_cpu_per_hour = 0.04749975
+cpus_per_client = 8
+cost_per_gpu_per_hour = 0.35
+
+
+def map_to_cost(seconds_per_second, config):
+    cost_per_server_cpus = cost_per_n1_cpu_per_hour * config.vcpus_per_gpu
+    cost_per_gpu = cost_per_gpu_per_hour + cost_per_server_cpus
+    cost_per_server = config.gpus_per_node * cost_per_gpu
+
+    cost_per_client = cost_per_n1_cpu_per_hour * cpus_per_client
+    client_costs_per_server = cost_per_client * config.clients_per_node
+
+    total_cost = (cost_per_server + client_costs_per_server) * config.num_nodes
+    cost_in_usd = seconds_per_second * total_cost / 3600
+    cost_per_cpu_hour = cost_in_usd / cost_per_n1_cpu_per_hour
+    return cost_per_cpu_hour
+
+
+def make_violin_patch(config, y_axis=None, percentile=5):
+    df = load_stats_for_config(config)
+    df = df[(df.process == "request") & (df.model == "bbh")]
+    inferences_per_second = df.groupby("step")["throughput"].agg("sum")
+
+    y_time = 1 / (inferences_per_second * config.kernel_stride)
+    y_cost = map_to_cost(y_time, config)
+
+    if y_axis is None:
+        ys = [y_time, y_cost]
+    elif y_axis == "time":
+        ys = [y_time]
+    elif y_axis == "cost":
+        ys = [y_cost]
+    else:
+        raise ValueError(f"Can't plot y-axis {y_axis}")
+
+    outputs = []
+    for metric in ys:
+        min_, max_ = np.percentile(metric, [percentile, 100 - percentile])
+        diff = (max_ - min_) / (101)
+
+        observations = metric[(metric >= min_) & (metric <= max_)]
+        kernel = gaussian_kde(observations)
+        y = np.linspace(min_ - diff, max_ + diff, 102)
+        x = kernel(y)
+        x[0] = x[-1] = 0
+        x /= x.max() * 1.05 * 2
+        outputs.append([x, y])
+
+    if len(outputs) == 1:
+        x, y = outputs[0]
+        x = list(x) + list(-x[::-1])
+        y = list(y) + list(y[::-1])
+        return x, y
+
+    outputs = [(x, y) for x, y in outputs]
+    outputs = [(x * (-1)**(i + 1), y) for i, (x, y) in enumerate(outputs)]
+    return outputs
