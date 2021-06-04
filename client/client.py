@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 import typeo
-from stillwater import ExceptionWrapper, ThreadedMultiStreamInferenceClient
+from stillwater import ExceptionWrapper, StreamingInferenceClient
 
 from frame_reader import GCPFrameDataGenerator, DualDetectorDataGenerator
 from channels import channels
@@ -23,7 +23,7 @@ def main(
     sample_rate: float = 4000,
     chunk_size: float = 1024,
 ):
-    client = ThreadedMultiStreamInferenceClient(
+    client = StreamingInferenceClient(
         url=url,
         model_name=model_name,
         model_version=model_version,

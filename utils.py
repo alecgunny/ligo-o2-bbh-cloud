@@ -34,8 +34,9 @@ def parse_blob_fname(name):
     return timestamp, length
 
 
-def _run_in_pool(fn, args, msg, exit_msg):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+def __run_in_pool(fn, args, msg, exit_msg, max_workers=None):
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    with executor:
         futures = []
         for a in args:
             if not isinstance(a, tuple):
@@ -66,6 +67,40 @@ def _run_in_pool(fn, args, msg, exit_msg):
         return results
 
 
+def _run_in_pool(fn, args, msg, exit_msg, max_workers=None):
+    q = queue.Queue()
+
+    def wrapper(*args):
+        try:
+            result = fn(*args)
+            q.put(result)
+        except Exception as e:
+            q.put(e)
+
+    threads = []
+    for arg in args:
+        if not isinstance(arg, tuple):
+            arg = (arg,)
+        t = threading.Thread(target=wrapper, args=arg)
+        t.start()
+        threads.append(t)
+
+    results = []
+
+    def _callback():
+        try:
+            result = q.get_nowait()
+            if isinstance(result, Exception):
+                raise result
+            results.append(result)
+        except queue.Empty:
+            pass
+        return not any([t.is_alive() for t in threads])
+
+    wait_for(_callback, msg, exit_msg)
+    return results
+
+
 def configure_vm(vm):
     vm.wait_until_ready(verbose=False)
 
@@ -81,7 +116,8 @@ def configure_vms_parallel(vms):
         configure_vm,
         vms,
         msg="Waiting for VMs to configure",
-        exit_msg="Configured all VMs"
+        exit_msg="Configured all VMs",
+        max_workers=min(32, len(vms))
     )
 
 
@@ -133,7 +169,8 @@ class RunParallel:
             self.run_on_vm,
             args,
             "Waiting for tasks to complete",
-            "All tasks completed"
+            "All tasks completed",
+            max_workers=min(32, len(vms))
         )
 
 

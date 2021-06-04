@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+import pdb
 import re
 import sys
 import time
@@ -66,7 +67,10 @@ def configure_wait_and_run(
     # and grab the associated IPs of their load balancers
     ips = []
     for i in range(run_config.num_nodes):
-        cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
+        try:
+            cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
+        except Exception:
+            pdb.set_trace()
         ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
         ips.append(ip)
 
