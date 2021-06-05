@@ -1,7 +1,6 @@
 import logging
 import re
 import time
-import typing
 
 import numpy as np
 import typeo
@@ -23,7 +22,7 @@ def main(
     kernel_stride: float,
     sample_rate: float = 4000,
     chunk_size: float = 1024,
-    start_time: typing.Optional[float] = None
+    start_time: float = None
 ):
     client = StreamingInferenceClient(
         url=url,
