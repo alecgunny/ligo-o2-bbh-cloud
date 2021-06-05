@@ -67,10 +67,7 @@ def configure_wait_and_run(
     # and grab the associated IPs of their load balancers
     ips = []
     for i in range(run_config.num_nodes):
-        try:
-            cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
-        except Exception:
-            pdb.set_trace()
+        cluster.k8s_client.wait_for_deployment(name=f"tritonserver-{i}")
         ip = cluster.k8s_client.wait_for_service(name=f"tritonserver-{i}")
         ips.append(ip)
 

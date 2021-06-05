@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+import typing
 
 import numpy as np
 import typeo
@@ -22,6 +23,7 @@ def main(
     kernel_stride: float,
     sample_rate: float = 4000,
     chunk_size: float = 1024,
+    start_time: typing.Optional[float] = None
 ):
     client = StreamingInferenceClient(
         url=url,
@@ -61,6 +63,9 @@ def main(
     # add this multi-data source to the client
     source = DualDetectorDataGenerator(**sources)
     pipe = client.add_data_source(source, str(sequence_id), sequence_id)
+
+    while time.time() < start_time:
+        time.sleep(1e-3)
 
     client.start()
     timeout, stopped = 1, False

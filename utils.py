@@ -134,6 +134,9 @@ class RunParallel:
     chunk_size: float = 1024
     output_dir: typing.Optional[str] = None
 
+    def __attrs_post_init__(self):
+        self._start_time = None
+
     @property
     def command(self):
         command = f"{_RUN} run"
@@ -142,6 +145,9 @@ class RunParallel:
                 command += " --{} {}".format(
                     a.name.replace("_", "-"), self.__dict__[a.name]
                 )
+        if self._start_time is not None:
+            command += f" --start-time {self._start_time}"
+
         return command + (
             " --url {ip}:8001 --sequence-id {sequence_id} --t0 {t0}"
         )
@@ -165,6 +171,7 @@ class RunParallel:
         seq_ids = [self.sequence_id + i for i in range(len(vms))]
         args = zip(vms, t0s, ips, seq_ids)
 
+        self._start_time = time.time() + 20
         _run_in_pool(
             self.run_on_vm,
             args,
